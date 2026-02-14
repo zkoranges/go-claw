@@ -82,6 +82,15 @@ func sendMessage(ctx context.Context, input *SendMessageInput, store *persistenc
 		return nil, fmt.Errorf("send_message: cannot send a message to yourself")
 	}
 
+	// Validate target agent exists.
+	agent, err := store.GetAgent(ctx, input.ToAgent)
+	if err != nil {
+		return nil, fmt.Errorf("send_message: check target agent: %w", err)
+	}
+	if agent == nil {
+		return nil, fmt.Errorf("send_message: target agent %q not found", input.ToAgent)
+	}
+
 	if err := store.SendAgentMessage(ctx, fromAgent, input.ToAgent, input.Content); err != nil {
 		return nil, fmt.Errorf("send_message: %w", err)
 	}
@@ -105,6 +114,8 @@ func readMessages(ctx context.Context, input *ReadMessagesInput, store *persiste
 		return nil, fmt.Errorf("policy denied capability %q", capReadMessages)
 	}
 
+	pv := pol.PolicyVersion()
+
 	agentID := shared.AgentID(ctx)
 	if agentID == "" {
 		agentID = "default"
@@ -113,6 +124,9 @@ func readMessages(ctx context.Context, input *ReadMessagesInput, store *persiste
 	limit := input.Limit
 	if limit <= 0 {
 		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
 	}
 
 	msgs, err := store.ReadAgentMessages(ctx, agentID, limit)
@@ -128,6 +142,8 @@ func readMessages(ctx context.Context, input *ReadMessagesInput, store *persiste
 			SentAt:    m.CreatedAt.Format("2006-01-02 15:04:05"),
 		}
 	}
+
+	audit.Record("allow", capReadMessages, "messages_read", pv, fmt.Sprintf("agent=%s count=%d", agentID, len(entries)))
 
 	return &ReadMessagesOutput{
 		Messages: entries,

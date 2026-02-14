@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/basket/go-claw/internal/audit"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
+	"github.com/basket/go-claw/internal/shared"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 )
@@ -39,6 +41,11 @@ type DelegateTaskOutput struct {
 	Error string `json:"error,omitempty"`
 }
 
+// chatPayload mirrors engine.chatTaskPayload for encoding delegated task payloads.
+type chatPayload struct {
+	Content string `json:"content"`
+}
+
 // delegateTask creates a task for the target agent and blocks until it completes.
 func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persistence.Store, pol policy.Checker) (*DelegateTaskOutput, error) {
 	// Policy check.
@@ -65,6 +72,21 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 		return nil, fmt.Errorf("delegate_task: session_id must be non-empty")
 	}
 
+	// Prevent self-delegation (would deadlock the calling agent's worker).
+	callerAgent := shared.AgentID(ctx)
+	if callerAgent != "" && callerAgent == input.TargetAgent {
+		return nil, fmt.Errorf("delegate_task: cannot delegate to yourself (%q)", callerAgent)
+	}
+
+	// Validate target agent exists.
+	agent, err := store.GetAgent(ctx, input.TargetAgent)
+	if err != nil {
+		return nil, fmt.Errorf("delegate_task: check target agent: %w", err)
+	}
+	if agent == nil {
+		return nil, fmt.Errorf("delegate_task: target agent %q not found", input.TargetAgent)
+	}
+
 	timeout := time.Duration(input.TimeoutSec) * time.Second
 	if timeout <= 0 {
 		timeout = 120 * time.Second
@@ -78,8 +100,14 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 		return nil, fmt.Errorf("delegate_task: ensure session: %w", err)
 	}
 
+	// Wrap prompt in chatTaskPayload JSON so the engine's EchoProcessor can decode it.
+	payload, err := json.Marshal(chatPayload{Content: input.Prompt})
+	if err != nil {
+		return nil, fmt.Errorf("delegate_task: encode payload: %w", err)
+	}
+
 	// Create the task for the target agent.
-	taskID, err := store.CreateTaskForAgent(ctx, input.TargetAgent, input.SessionID, input.Prompt)
+	taskID, err := store.CreateTaskForAgent(ctx, input.TargetAgent, input.SessionID, string(payload))
 	if err != nil {
 		return nil, fmt.Errorf("delegate_task: create task: %w", err)
 	}
@@ -98,6 +126,11 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 	for {
 		select {
 		case <-ctx.Done():
+			// Cancel the child task so it doesn't run orphaned.
+			if _, abortErr := store.AbortTask(ctx, taskID); abortErr != nil {
+				slog.Warn("delegate_task: failed to abort child task on context cancel",
+					"task_id", taskID, "error", abortErr)
+			}
 			return &DelegateTaskOutput{
 				TaskID: taskID,
 				Status: "CANCELED",
@@ -105,6 +138,11 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 			}, nil
 		case <-ticker.C:
 			if time.Now().After(deadline) {
+				// Cancel the child task on timeout so it doesn't run orphaned.
+				if _, abortErr := store.AbortTask(context.Background(), taskID); abortErr != nil {
+					slog.Warn("delegate_task: failed to abort child task on timeout",
+						"task_id", taskID, "error", abortErr)
+				}
 				return &DelegateTaskOutput{
 					TaskID: taskID,
 					Status: "FAILED",

@@ -317,6 +317,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		{schemaVersionV4, schemaChecksumV4},
 		{schemaVersionV5, schemaChecksumV5},
 		{schemaVersionV6, schemaChecksumV6},
+		{schemaVersionV7, schemaChecksumV7},
 	}
 	matched := false
 	for _, vc := range versionChecksums {
@@ -2813,13 +2814,28 @@ func (s *Store) UpdateAgentStatus(ctx context.Context, agentID, status string) e
 }
 
 func (s *Store) DeleteAgent(ctx context.Context, agentID string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM agents WHERE agent_id = ?;`, agentID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("delete agent: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM agents WHERE agent_id = ?;`, agentID)
 	if err != nil {
 		return fmt.Errorf("delete agent: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("agent %q not found", agentID)
+	}
+
+	// Clean up inter-agent messages to/from the deleted agent.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_messages WHERE from_agent = ? OR to_agent = ?;`, agentID, agentID); err != nil {
+		return fmt.Errorf("delete agent messages: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete agent: commit: %w", err)
 	}
 	return nil
 }
