@@ -1,0 +1,93 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify gofmt
+        run: |
+          set -euo pipefail
+          files="$(git ls-files '*.go')"
+          if [ -z "${files}" ]; then
+            exit 0
+          fi
+          unformatted="$(gofmt -l ${files})"
+          if [ -n "${unformatted}" ]; then
+            echo "Unformatted Go files:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Race test
+        run: go test -race ./... -count=1
+
+      - name: Verify parity scorecard is up to date
+        run: |
+          set -euo pipefail
+          go run ./tools/parity/scorecard -in docs/parity/parity.yaml -out docs/parity/scorecard.generated.md
+          git diff --exit-code -- docs/parity/scorecard.generated.md
+
+      - name: Runtime smoke (daemon + ACP flow)
+        run: |
+          set -euo pipefail
+          HOME_DIR="$(mktemp -d)"
+          PORT="18889"
+          cat > "${HOME_DIR}/config.yaml" <<EOF
+          bind_addr: "127.0.0.1:${PORT}"
+          worker_count: 2
+          task_timeout_seconds: 30
+          EOF
+          cat > "${HOME_DIR}/policy.yaml" <<EOF
+          allow_capabilities:
+            - acp.read
+            - acp.mutate
+          EOF
+
+          GOCLAW_HOME="${HOME_DIR}" go run ./cmd/goclaw -daemon >"${HOME_DIR}/daemon.log" 2>&1 &
+          DAEMON_PID="$!"
+          cleanup() {
+            kill "${DAEMON_PID}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          if ! curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+            echo "daemon failed to become healthy"
+            cat "${HOME_DIR}/daemon.log" || true
+            exit 1
+          fi
+
+          TOKEN="$(tr -d '\r\n' < "${HOME_DIR}/auth.token")"
+          go run ./tools/verify/runtime_smoke -url "ws://127.0.0.1:${PORT}/ws" -token "${TOKEN}" -timeout 15s

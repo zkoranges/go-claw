@@ -1,0 +1,15 @@
+# Binaries
+/goclaw
+/ironclaw
+/acp_ws_check
+/dist/
+
+# Secrets
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Reference implementations (large, read-only)
+reference/

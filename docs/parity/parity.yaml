@@ -1,0 +1,504 @@
+version: 1
+sections:
+  - id: gateway
+    title: Gateway System
+    owner: runtime
+    target_release: v0.2
+    default_risk: medium
+    default_spec_refs:
+      - GC-SPEC-ACP-001
+    default_traceability_refs:
+      - GC-SPEC-ACP-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: Gateway control plane
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: true
+        spec_refs: [GC-SPEC-ACP-001]
+        traceability_refs: [GC-SPEC-ACP-001]
+        evidence: [docs/EVIDENCE_VERIFY/acp_contract.txt]
+      - feature: Health check endpoint
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: false
+        spec_refs: [GC-SPEC-OBS-005]
+        traceability_refs: [GC-SPEC-OBS-005]
+      - feature: Metrics endpoint
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: false
+        spec_refs: [GC-SPEC-OBS-004]
+        traceability_refs: [GC-SPEC-OBS-004]
+      - feature: WebSocket auth (bearer token)
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: true
+        spec_refs: [GC-SPEC-ACP-003]
+        traceability_refs: [GC-SPEC-ACP-003]
+        evidence: [docs/EVIDENCE_VERIFY/acp_contract.txt]
+      - feature: Origin allowlist validation
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        priority: "-"
+        verified: false
+        spec_refs: [GC-SPEC-ACP-004]
+        traceability_refs: [GC-SPEC-ACP-004]
+      - feature: Configuration hot-reload
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: false
+        spec_refs: [GC-SPEC-CFG-002]
+        traceability_refs: [GC-SPEC-CFG-002]
+      - feature: HTTP endpoints for Control UI
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: true
+        spec_refs: [GC-SPEC-SCOPE-002]
+        traceability_refs: [GC-SPEC-SCOPE-002]
+        evidence: [internal/gateway/gateway_api_test.go]
+      - feature: OpenAI-compatible HTTP API
+        openclaw: implemented
+        goclaw: implemented
+        priority: P3
+        verified: true
+        spec_refs: [GC-SPEC-SCOPE-002]
+        traceability_refs: [GC-SPEC-SCOPE-002]
+      - feature: Canvas hosting (A2UI)
+        openclaw: implemented
+        goclaw: out_of_scope
+        priority: "-"
+        verified: false
+        spec_refs: [GC-SPEC-NG-003]
+        traceability_refs: [GC-SPEC-NG-003]
+      - feature: Gateway lock (PID-based)
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+        spec_refs: [GC-SPEC-REL-001]
+        traceability_refs: [GC-SPEC-REL-001]
+      - feature: launchd/systemd integration
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+        spec_refs: [GC-SPEC-SCOPE-002]
+        traceability_refs: [GC-SPEC-SCOPE-002]
+      - feature: Bonjour/mDNS discovery
+        openclaw: implemented
+        goclaw: out_of_scope
+        priority: "-"
+        verified: false
+        spec_refs: [GC-SPEC-NG-002]
+        traceability_refs: [GC-SPEC-NG-002]
+      - feature: Tailscale integration
+        openclaw: implemented
+        goclaw: out_of_scope
+        priority: "-"
+        verified: false
+        spec_refs: [GC-SPEC-NG-002]
+        traceability_refs: [GC-SPEC-NG-002]
+      - feature: Doctor diagnostics
+        openclaw: implemented
+        goclaw: implemented
+        priority: P2
+        verified: true
+        spec_refs: [GC-SPEC-RUN-001]
+        traceability_refs: [GC-SPEC-RUN-001]
+        evidence: [cmd/goclaw/doctor.go]
+      - feature: ACP hello/version negotiation
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        priority: "-"
+        verified: true
+        spec_refs: [GC-SPEC-ACP-002]
+        traceability_refs: [GC-SPEC-ACP-002]
+        evidence: [docs/EVIDENCE_VERIFY/acp_contract.txt]
+      - feature: ACP backpressure close
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        priority: "-"
+        verified: true
+        spec_refs: [GC-SPEC-ACP-008]
+        traceability_refs: [GC-SPEC-ACP-008]
+        evidence: [docs/EVIDENCE_VERIFY/acp_replay_backpressure.txt]
+      - feature: ACP cursor replay
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        priority: "-"
+        verified: true
+        spec_refs: [GC-SPEC-ACP-007]
+        traceability_refs: [GC-SPEC-ACP-007]
+        evidence: [docs/EVIDENCE_VERIFY/acp_replay_backpressure.txt]
+      - feature: Context compaction
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: true
+        evidence: [internal/engine/compactor_test.go]
+
+  - id: security
+    title: Security Features
+    owner: security
+    target_release: v0.2
+    default_risk: high
+    default_spec_refs:
+      - GC-SPEC-SEC-001
+    default_traceability_refs:
+      - GC-SPEC-SEC-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: Gateway token auth
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        spec_refs: [GC-SPEC-ACP-003, GC-SPEC-SEC-001]
+        traceability_refs: [GC-SPEC-ACP-003, GC-SPEC-SEC-001]
+        evidence: [docs/EVIDENCE_VERIFY/acp_contract.txt]
+      - feature: Default-deny policy engine
+        openclaw: partial
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-SEC-001, GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-001, GC-SPEC-SEC-002]
+        evidence: [docs/EVIDENCE/S-006/policy.txt, docs/EVIDENCE/S-006/policy_reload.txt]
+      - feature: SSRF protection
+        openclaw: partial
+        goclaw: implemented
+        verified: true
+        spec_refs: [GC-SPEC-SEC-004]
+        traceability_refs: [GC-SPEC-SEC-004]
+        evidence: [docs/EVIDENCE_VERIFY/security_policy_ssrf_redaction.txt]
+      - feature: WASM sandbox
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-SKL-002]
+        traceability_refs: [GC-SPEC-SKL-002]
+        evidence: [docs/EVIDENCE_VERIFY/skills_wasm_lifecycle.txt]
+      - feature: Policy versioning + pinning
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: false
+        spec_refs: [GC-SPEC-SEC-003]
+        traceability_refs: [GC-SPEC-SEC-003]
+      - feature: Approval Broker (async)
+        openclaw: partial
+        goclaw: implemented
+        verified: true
+        spec_refs: [GC-SPEC-SEC-008]
+        traceability_refs: [GC-SPEC-SEC-008]
+        evidence: [docs/EVIDENCE_VERIFY/acp_replay_backpressure.txt]
+      - feature: Secret redaction
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-SEC-005]
+        traceability_refs: [GC-SPEC-SEC-005]
+        evidence: [docs/EVIDENCE_VERIFY/security_policy_ssrf_redaction.txt]
+      - feature: Immutable audit log
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-SEC-006, GC-SPEC-OBS-003]
+        traceability_refs: [GC-SPEC-SEC-006, GC-SPEC-OBS-003]
+        evidence: [docs/EVIDENCE_VERIFY/security_policy_ssrf_redaction.txt]
+      - feature: Incident export bundle
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-OBS-006]
+        traceability_refs: [GC-SPEC-OBS-006]
+        evidence: [docs/EVIDENCE_VERIFY/incident_export.txt]
+      - feature: Exec approvals
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        spec_refs: [GC-SPEC-SEC-008]
+        traceability_refs: [GC-SPEC-SEC-008]
+        evidence: [docs/EVIDENCE_VERIFY/acp_replay_backpressure.txt]
+      - feature: TLS 1.3 minimum
+        openclaw: implemented
+        goclaw: not_implemented
+        verified: false
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+      - feature: Tool policies
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+        evidence: [docs/EVIDENCE/S-006/policy.txt]
+      - feature: Docker sandbox
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: true
+        spec_refs: [GC-SPEC-SCOPE-001]
+        traceability_refs: [GC-SPEC-SCOPE-001]
+        evidence: [internal/tools/docker_test.go]
+      - feature: Device pairing
+        openclaw: implemented
+        goclaw: out_of_scope
+        verified: false
+        spec_refs: [GC-SPEC-NG-002]
+        traceability_refs: [GC-SPEC-NG-002]
+      - feature: Tailscale identity
+        openclaw: implemented
+        goclaw: out_of_scope
+        verified: false
+        spec_refs: [GC-SPEC-NG-002]
+        traceability_refs: [GC-SPEC-NG-002]
+      - feature: DM pairing verification
+        openclaw: implemented
+        goclaw: not_implemented
+        verified: false
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+      - feature: Allowlist/blocklist
+        openclaw: implemented
+        goclaw: not_implemented
+        verified: false
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+      - feature: Safe bins allowlist
+        openclaw: implemented
+        goclaw: not_implemented
+        verified: false
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+      - feature: LD*/DYLD* validation
+        openclaw: implemented
+        goclaw: not_implemented
+        verified: false
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+      - feature: Path traversal prevention
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+        evidence: [internal/skills/installer_test.go]
+      - feature: Prompt injection defense
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+        evidence: [internal/safety/sanitizer_test.go]
+      - feature: Leak detection
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+        evidence: [internal/safety/sanitizer_test.go]
+      - feature: Webhook signature verification
+        openclaw: implemented
+        goclaw: not_implemented
+        verified: false
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+
+  - id: search_tools
+    title: Search & Tools
+    owner: platform
+    target_release: v0.3
+    default_risk: medium
+    default_spec_refs:
+      - GC-SPEC-SEC-002
+    default_traceability_refs:
+      - GC-SPEC-SEC-002
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: Web search
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        spec_refs: [GC-SPEC-SEC-002]
+        traceability_refs: [GC-SPEC-SEC-002]
+        evidence: [internal/tools/search_test.go]
+      - feature: Brave Search provider
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/tools/provider_brave_test.go]
+      - feature: Perplexity Sonar provider
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/tools/provider_perplexity_test.go]
+      - feature: DuckDuckGo provider
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/tools/provider_ddg_test.go]
+      - feature: Configurable search preference
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/tools/tools_test.go]
+      - feature: URL fetch / read
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/tools/reader_test.go]
+      - feature: File tools (read/write/list/patch)
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: true
+        evidence: [internal/tools/file_test.go]
+      - feature: Shell command execution
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: true
+        evidence: [internal/tools/shell_test.go]
+      - feature: Browser automation
+        openclaw: implemented
+        goclaw: out_of_scope
+        verified: false
+        spec_refs: [GC-SPEC-NG-001]
+        traceability_refs: [GC-SPEC-NG-001]
+      - feature: MCP client
+        openclaw: implemented
+        goclaw: implemented
+        priority: "-"
+        verified: true
+        evidence: [internal/mcp/client_test.go]
+      - feature: Dynamic tool builder
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+
+  - id: persistence_reliability
+    title: Persistence & Reliability
+    owner: runtime
+    target_release: v0.2
+    default_risk: high
+    default_spec_refs:
+      - GC-SPEC-REL-001
+    default_traceability_refs:
+      - GC-SPEC-REL-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: Durable task persistence
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-PER-001]
+        traceability_refs: [GC-SPEC-PER-001]
+        evidence: [docs/EVIDENCE_VERIFY/db_pragmas.txt]
+      - feature: Transactional state machine
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-STM-001]
+        traceability_refs: [GC-SPEC-STM-001]
+        evidence: [docs/EVIDENCE_VERIFY/queue_lease_race.txt]
+      - feature: Lease-based task ownership
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-QUE-002]
+        traceability_refs: [GC-SPEC-QUE-002]
+        evidence: [docs/EVIDENCE_VERIFY/queue_lease_race.txt]
+      - feature: Crash recovery
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-REL-003]
+        traceability_refs: [GC-SPEC-REL-003]
+        evidence: [docs/EVIDENCE_VERIFY/recovery_sigkill.txt]
+      - feature: Retry with exponential backoff
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-QUE-003]
+        traceability_refs: [GC-SPEC-QUE-003]
+        evidence: [docs/EVIDENCE_VERIFY/queue_lease_race.txt]
+      - feature: Dead-letter queue
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-QUE-004]
+        traceability_refs: [GC-SPEC-QUE-004]
+        evidence: [docs/EVIDENCE_VERIFY/queue_lease_race.txt]
+      - feature: Poison-pill detection
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-QUE-005]
+        traceability_refs: [GC-SPEC-QUE-005]
+        evidence: [docs/EVIDENCE_VERIFY/queue_lease_race.txt]
+      - feature: Idempotency key dedup
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-QUE-006]
+        traceability_refs: [GC-SPEC-QUE-006]
+        evidence: [docs/EVIDENCE_VERIFY/queue_lease_race.txt]
+      - feature: Schema migration ledger
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-DATA-001]
+        traceability_refs: [GC-SPEC-DATA-001]
+        evidence: [docs/EVIDENCE_VERIFY/db_schema.txt]
+      - feature: Future-version guard
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-DATA-002]
+        traceability_refs: [GC-SPEC-DATA-002]
+        evidence: [docs/EVIDENCE/S-002/migrations.txt]
+      - feature: Online-consistent backup
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-PER-005]
+        traceability_refs: [GC-SPEC-PER-005]
+        evidence: [docs/EVIDENCE_VERIFY/backup_restore_drill.txt]
+      - feature: Retention + PII purge
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-DATA-006]
+        traceability_refs: [GC-SPEC-DATA-006]
+        evidence: [docs/EVIDENCE_VERIFY/us020_retention_purge.txt]
+      - feature: Graceful shutdown (phased drain)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-REL-005]
+        traceability_refs: [GC-SPEC-REL-005]
+        evidence: [docs/EVIDENCE_VERIFY/graceful_shutdown_cancel.txt]
+      - feature: Priority aging / no-starvation
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-QUE-007]
+        traceability_refs: [GC-SPEC-QUE-007]
+        evidence: [docs/EVIDENCE_VERIFY/bounded_lanes_scheduling.txt]
+      - feature: Backpressure at intake
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        spec_refs: [GC-SPEC-QUE-008]
+        traceability_refs: [GC-SPEC-QUE-008]
+        evidence: [docs/EVIDENCE_VERIFY/bounded_lanes_scheduling.txt]
