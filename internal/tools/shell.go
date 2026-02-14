@@ -87,18 +87,7 @@ type ShellOutput struct {
 }
 
 func registerShell(g *genkit.Genkit, reg *Registry) ai.ToolRef {
-	// Decide executor based on config (TODO: pass config to registerShell or Registry)
-	// For now we assume host executor unless sandbox is explicitly requested.
-	// Since Registry struct doesn't have the full config, we might need to update Registry or passed args.
-	// However, we can default to HostExecutor for now and let the caller swap it if needed?
-	// Better: Update Registry to hold ShellConfig? Or just check if we can access it.
-	// Registry has APIKeys but not full config.
-	// Let's use HostExecutor by default here, and we will update `tools.go` to pass the config or executor.
 	var executor Executor = &HostExecutor{}
-
-	// If the registry has a way to provide the sandbox, we'd use it.
-	// Let's assume we can upgrade this later. For P2-2, we need to enable it.
-	// I'll update tools.go to pass the Executor.
 
 	return genkit.DefineTool(g, "exec",
 		"Execute a shell command and return its output. Commands on the deny list (rm, sudo, kill, etc.) are blocked. Output is truncated to 8KB and secrets are redacted.",
@@ -143,17 +132,6 @@ func registerShell(g *genkit.Genkit, reg *Registry) ai.ToolRef {
 
 			execCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-
-			// Use executor
-			// We need to access the executor. Since this closure captures variables,
-			// if we change registerShell signature, we can pass it.
-			// But wait, I can't change registerShell signature without changing tools.go.
-			// I should pause and update tools.go first or assume I will.
-			// I'll assume reg has an Executor field.
-
-			// For now, I'll use the local var 'executor' defined above (HostExecutor).
-			// To make it dynamic, I need to inject it.
-			// I will add Executor field to Registry struct in the next step.
 
 			exec := executor
 			if reg.ShellExecutor != nil {

@@ -9,7 +9,7 @@ import (
 	"github.com/basket/go-claw/internal/config"
 )
 
-func TestLoad_FromIronclawHome(t *testing.T) {
+func TestLoad_FromGoclawHome(t *testing.T) {
 	// [SPEC: SPEC-CONFIG-DIR-1] [PDR: V-20, V-21]
 	home := filepath.Join(t.TempDir(), "home")
 	ic := filepath.Join(home, ".goclaw")

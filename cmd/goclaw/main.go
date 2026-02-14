@@ -30,7 +30,6 @@ import (
 	"github.com/basket/go-claw/internal/mcp"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
-	legacy "github.com/basket/go-claw/internal/sandbox/legacy"
 	"github.com/basket/go-claw/internal/sandbox/wasm"
 	"github.com/basket/go-claw/internal/skills"
 	"github.com/basket/go-claw/internal/telemetry"
@@ -861,9 +860,6 @@ The system runs this checklist periodically to ensure health.
 			}
 		}
 	}()
-
-	// Minimal legacy skill parser/runner scaffold initialization.
-	_ = legacy.Runner{WorkspaceDir: "./workspace"}
 
 	go func() {
 		for ev := range wasmWatcher.Notifications() {

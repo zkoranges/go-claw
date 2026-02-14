@@ -93,7 +93,7 @@ func waitForTaskDone(t *testing.T, store *persistence.Store, taskID string) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		task, err := store.GetTask(context.Background(), taskID)
-		if err == nil && (task.Status == persistence.TaskStatusCompleted || task.Status == persistence.TaskStatusFailed || task.Status == persistence.TaskStatusCanceled) {
+		if err == nil && (task.Status == persistence.TaskStatusSucceeded || task.Status == persistence.TaskStatusFailed || task.Status == persistence.TaskStatusCanceled) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -136,7 +136,7 @@ func TestGateway_SystemStatusAndAgentChat(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -229,7 +229,7 @@ func TestGateway_AgentAbortReturnsAborted(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -341,7 +341,7 @@ func TestGateway_SessionListReturnsData(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -396,7 +396,7 @@ func TestGateway_ToolsUpdatedNotification(t *testing.T) {
 	toolEvents := make(chan string, 1)
 	srv := gateway.New(gateway.Config{
 		Store:        store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:     makeTestRegistry(store, eng),
 		Policy:       gatewayTestPolicy,
 		AuthToken:    gatewayTestAuthToken,
 		ToolsUpdated: toolEvents,
@@ -450,7 +450,7 @@ func TestGateway_InvalidRequestValidation(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -518,7 +518,7 @@ func TestGateway_WSRejectsMissingOrInvalidAuth(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -560,7 +560,7 @@ func TestGateway_MutatingRequiresHandshake(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -611,7 +611,7 @@ func TestGateway_OriginRejectsDisallowedOrigin(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:        store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:     makeTestRegistry(store, eng),
 		Policy:       gatewayTestPolicy,
 		AuthToken:    gatewayTestAuthToken,
 		AllowOrigins: []string{"http://localhost:3000"},
@@ -674,7 +674,7 @@ func TestGateway_AbuseDenialMatrix(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:        store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:     makeTestRegistry(store, eng),
 		Policy:       policy.Default(), // default-deny
 		AuthToken:    gatewayTestAuthToken,
 		AllowOrigins: []string{"http://localhost:3000"},
@@ -782,7 +782,7 @@ func TestGateway_ApprovalTimeoutDefaultDeny(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:           store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:        makeTestRegistry(store, eng),
 		Policy:          gatewayTestPolicy,
 		AuthToken:       gatewayTestAuthToken,
 		ApprovalTimeout: 100 * time.Millisecond, // short for test
@@ -868,7 +868,7 @@ func TestGateway_PolicyDeniesCapabilities(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    policy.Default(),
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -939,7 +939,7 @@ func TestGateway_SessionEventsSubscribeReplayOrdered(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -1039,7 +1039,7 @@ func TestGateway_SessionEventsSubscribeReplayGap(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -1109,7 +1109,7 @@ func TestGateway_SessionEventsSubscribeBackpressureClose(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -1161,7 +1161,7 @@ func TestGateway_HeadlessApprovalWorkflow(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -1298,7 +1298,7 @@ func TestGateway_PolicyDecisionAudited(t *testing.T) {
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    policy.Default(), // deny acp.read capability
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -1347,7 +1347,7 @@ func TestHealthzEndpointContract(t *testing.T) {
 	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -1388,7 +1388,7 @@ func TestMetricsEndpointCoverage(t *testing.T) {
 	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -1430,7 +1430,7 @@ func TestMetricsEndpoint_RejectsMissingAuth(t *testing.T) {
 	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -1452,7 +1452,7 @@ func TestPrometheusMetricsEndpoint(t *testing.T) {
 	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})
@@ -1514,7 +1514,7 @@ func TestPrometheusMetricsEndpoint_RejectsMissingAuth(t *testing.T) {
 	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
 	srv := gateway.New(gateway.Config{
 		Store:     store,
-		Registry: makeTestRegistry(store, eng),
+		Registry:  makeTestRegistry(store, eng),
 		Policy:    gatewayTestPolicy,
 		AuthToken: gatewayTestAuthToken,
 	})

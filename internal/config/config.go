@@ -157,11 +157,11 @@ type Config struct {
 
 	ContextLimits map[string]int `yaml:"context_limits"`
 
-	Skills   SkillsConfig   `yaml:"skills"`
-	Tools    ToolsConfig    `yaml:"tools"`
-	Channels ChannelsConfig `yaml:"channels"`
-	MCP      MCPConfig      `yaml:"mcp"`
-	Agents []AgentConfigEntry `yaml:"agents"`
+	Skills   SkillsConfig       `yaml:"skills"`
+	Tools    ToolsConfig        `yaml:"tools"`
+	Channels ChannelsConfig     `yaml:"channels"`
+	MCP      MCPConfig          `yaml:"mcp"`
+	Agents   []AgentConfigEntry `yaml:"agents"`
 
 	NeedsGenesis bool `yaml:"-"`
 }

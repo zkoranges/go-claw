@@ -338,14 +338,24 @@ func (e *Engine) setLastError(err error) {
 var ErrQueueSaturated = fmt.Errorf("queue saturated: backpressure applied")
 
 func (e *Engine) CreateChatTask(ctx context.Context, sessionID, content string) (string, error) {
-	// When engine is agent-scoped, delegate to agent-scoped method for correct
-	// queue depth checks and task agent_id assignment.
-	if e.agentID != "" {
-		return e.CreateChatTaskForAgent(ctx, e.agentID, sessionID, content)
-	}
+	return e.createChatTask(ctx, e.agentID, sessionID, content)
+}
+
+// CreateChatTaskForAgent creates a chat task scoped to a specific agent.
+func (e *Engine) CreateChatTaskForAgent(ctx context.Context, agentID, sessionID, content string) (string, error) {
+	return e.createChatTask(ctx, agentID, sessionID, content)
+}
+
+func (e *Engine) createChatTask(ctx context.Context, agentID, sessionID, content string) (string, error) {
 	// GC-SPEC-QUE-008: Apply backpressure at intake when queue is saturated.
 	if e.config.MaxQueueDepth > 0 {
-		depth, err := e.store.QueueDepth(ctx)
+		var depth int
+		var err error
+		if agentID != "" {
+			depth, err = e.store.QueueDepthForAgent(ctx, agentID)
+		} else {
+			depth, err = e.store.QueueDepth(ctx)
+		}
 		if err != nil {
 			return "", fmt.Errorf("check queue depth: %w", err)
 		}
@@ -364,54 +374,32 @@ func (e *Engine) CreateChatTask(ctx context.Context, sessionID, content string) 
 	if err != nil {
 		return "", fmt.Errorf("encode task payload: %w", err)
 	}
-	// GC-SPEC-RUN-004: Pass trace_id from context through to task creation.
-	taskID, err := e.store.CreateTask(ctx, sessionID, string(payload))
-	if err != nil {
-		return "", err
+	if agentID != "" {
+		return e.store.CreateTaskForAgent(ctx, agentID, sessionID, string(payload))
 	}
-	return taskID, nil
-}
-
-// CreateChatTaskForAgent creates a chat task scoped to a specific agent.
-func (e *Engine) CreateChatTaskForAgent(ctx context.Context, agentID, sessionID, content string) (string, error) {
-	// GC-SPEC-QUE-008: Apply backpressure at intake when queue is saturated.
-	if e.config.MaxQueueDepth > 0 {
-		depth, err := e.store.QueueDepthForAgent(ctx, agentID)
-		if err != nil {
-			return "", fmt.Errorf("check queue depth: %w", err)
-		}
-		if depth >= e.config.MaxQueueDepth {
-			slog.Warn("queue backpressure applied", "depth", depth, "max", e.config.MaxQueueDepth, "agent_id", agentID)
-			return "", ErrQueueSaturated
-		}
-	}
-	if err := e.store.EnsureSession(ctx, sessionID); err != nil {
-		return "", err
-	}
-	if err := e.store.AddHistory(ctx, sessionID, "user", content, tokenutil.EstimateTokens(content)); err != nil {
-		return "", err
-	}
-	payload, err := json.Marshal(chatTaskPayload{Content: content})
-	if err != nil {
-		return "", fmt.Errorf("encode task payload: %w", err)
-	}
-	taskID, err := e.store.CreateTaskForAgent(ctx, agentID, sessionID, string(payload))
-	if err != nil {
-		return "", err
-	}
-	return taskID, nil
+	return e.store.CreateTask(ctx, sessionID, string(payload))
 }
 
 // StreamChatTask handles streaming chat directly without going through the task queue.
 // It returns a task ID and an error channel for streaming results.
 func (e *Engine) StreamChatTask(ctx context.Context, sessionID, content string, onChunk func(content string) error) (string, error) {
-	// When engine is agent-scoped, delegate to agent-scoped method for correct
-	// queue depth checks and task agent_id assignment.
-	if e.agentID != "" {
-		return e.StreamChatTaskForAgent(ctx, e.agentID, sessionID, content, onChunk)
-	}
+	return e.streamChatTask(ctx, e.agentID, sessionID, content, onChunk)
+}
+
+// StreamChatTaskForAgent handles streaming chat scoped to a specific agent.
+func (e *Engine) StreamChatTaskForAgent(ctx context.Context, agentID, sessionID, content string, onChunk func(content string) error) (string, error) {
+	return e.streamChatTask(ctx, agentID, sessionID, content, onChunk)
+}
+
+func (e *Engine) streamChatTask(ctx context.Context, agentID, sessionID, content string, onChunk func(content string) error) (string, error) {
 	if e.config.MaxQueueDepth > 0 {
-		depth, err := e.store.QueueDepth(ctx)
+		var depth int
+		var err error
+		if agentID != "" {
+			depth, err = e.store.QueueDepthForAgent(ctx, agentID)
+		} else {
+			depth, err = e.store.QueueDepth(ctx)
+		}
 		if err != nil {
 			return "", fmt.Errorf("check queue depth: %w", err)
 		}
@@ -431,79 +419,25 @@ func (e *Engine) StreamChatTask(ctx context.Context, sessionID, content string, 
 	if err != nil {
 		return "", fmt.Errorf("encode task payload: %w", err)
 	}
-	taskID, err := e.store.CreateTask(ctx, sessionID, string(payload))
+
+	var taskID string
+	if agentID != "" {
+		taskID, err = e.store.CreateTaskForAgent(ctx, agentID, sessionID, string(payload))
+	} else {
+		taskID, err = e.store.CreateTask(ctx, sessionID, string(payload))
+	}
 	if err != nil {
 		return "", err
 	}
 
-	// Run streaming in background and return immediately with task ID
 	go func() {
 		taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
 		defer cancel()
 
-		// Use EchoProcessor's Brain for streaming
 		if e.proc == nil {
 			slog.Error("processor not initialized for streaming")
 			return
 		}
-
-		// Type assert to get the Brain
-		var brain Brain
-		switch p := e.proc.(type) {
-		case EchoProcessor:
-			brain = p.Brain
-		}
-
-		if brain == nil {
-			slog.Error("brain not available for streaming")
-			return
-		}
-
-		// Stream the response - history is saved inside Stream()
-		if err := brain.Stream(taskCtx, sessionID, content, onChunk); err != nil {
-			slog.Error("streaming failed", "error", err)
-			_, _ = e.store.HandleTaskFailure(taskCtx, taskID, err.Error())
-			return
-		}
-
-		// Mark task as completed
-		_ = e.store.CompleteTask(taskCtx, taskID, `{"reply": "streamed"}`)
-	}()
-
-	return taskID, nil
-}
-
-// StreamChatTaskForAgent handles streaming chat scoped to a specific agent.
-func (e *Engine) StreamChatTaskForAgent(ctx context.Context, agentID, sessionID, content string, onChunk func(content string) error) (string, error) {
-	if e.config.MaxQueueDepth > 0 {
-		depth, err := e.store.QueueDepthForAgent(ctx, agentID)
-		if err != nil {
-			return "", fmt.Errorf("check queue depth: %w", err)
-		}
-		if depth >= e.config.MaxQueueDepth {
-			slog.Warn("queue backpressure applied", "depth", depth, "max", e.config.MaxQueueDepth, "agent_id", agentID)
-			return "", ErrQueueSaturated
-		}
-	}
-	if err := e.store.EnsureSession(ctx, sessionID); err != nil {
-		return "", err
-	}
-	if err := e.store.AddHistory(ctx, sessionID, "user", content, tokenutil.EstimateTokens(content)); err != nil {
-		return "", err
-	}
-
-	payload, err := json.Marshal(chatTaskPayload{Content: content})
-	if err != nil {
-		return "", fmt.Errorf("encode task payload: %w", err)
-	}
-	taskID, err := e.store.CreateTaskForAgent(ctx, agentID, sessionID, string(payload))
-	if err != nil {
-		return "", err
-	}
-
-	go func() {
-		taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
-		defer cancel()
 
 		var brain Brain
 		switch p := e.proc.(type) {

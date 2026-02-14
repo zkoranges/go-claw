@@ -388,7 +388,7 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 		var p struct {
 			SessionID string `json:"session_id"`
 			Content   string `json:"content"`
-			Text      string `json:"text"`    // GC-SPEC-ACP-009: OpenClaw backward-compat alias.
+			Text      string `json:"text"`     // GC-SPEC-ACP-009: OpenClaw backward-compat alias.
 			AgentID   string `json:"agent_id"` // Optional, defaults to "default".
 		}
 		if err := json.Unmarshal(req.Params, &p); err != nil {
@@ -423,7 +423,7 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 		var p struct {
 			SessionID string `json:"session_id"`
 			Content   string `json:"content"`
-			Text      string `json:"text"`    // GC-SPEC-ACP-009: OpenClaw backward-compat alias.
+			Text      string `json:"text"`     // GC-SPEC-ACP-009: OpenClaw backward-compat alias.
 			AgentID   string `json:"agent_id"` // Optional, defaults to "default".
 		}
 		if err := json.Unmarshal(req.Params, &p); err != nil {

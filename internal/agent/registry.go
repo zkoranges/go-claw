@@ -52,8 +52,8 @@ type Registry struct {
 	bus            *bus.Bus
 	policy         policy.Checker
 	wasm           *wasm.Host
-	apiKeys        map[string]string          // shared tool API keys (brave, perplexity, etc.)
-	onAgentCreated func(ra *RunningAgent)     // optional provisioning callback for runtime-created agents
+	apiKeys        map[string]string      // shared tool API keys (brave, perplexity, etc.)
+	onAgentCreated func(ra *RunningAgent) // optional provisioning callback for runtime-created agents
 }
 
 // RegisterTestAgent registers a pre-built engine as a named agent.

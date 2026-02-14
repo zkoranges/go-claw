@@ -24,7 +24,7 @@ func moduleRoot(t *testing.T) string {
 	return filepath.Dir(gomod)
 }
 
-func TestSmoke_BuildsIronclawBinary(t *testing.T) {
+func TestSmoke_BuildsGoclawBinary(t *testing.T) {
 	// Smoke test for the "single-binary" build property.
 	// [SPEC: SPEC-GOAL-G2] [PDR: V-24]
 

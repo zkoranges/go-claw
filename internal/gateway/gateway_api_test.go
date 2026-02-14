@@ -32,7 +32,7 @@ func apiTestServer(t *testing.T, opts ...func(*gateway.Config)) (*httptest.Serve
 	})
 
 	cfg := gateway.Config{
-		Store:             store,
+		Store: store,
 		Registry: func() *agent.Registry {
 			reg := agent.NewRegistry(store, nil, nil, nil, nil)
 			reg.RegisterTestAgent("default", eng)

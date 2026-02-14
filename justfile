@@ -24,6 +24,22 @@ test-v:
 vet:
     go vet ./...
 
+# format all Go files
+fmt:
+    gofmt -w .
+
+# check that all Go files are formatted (fails if not)
+fmt-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    unformatted=$(gofmt -l .)
+    if [ -n "$unformatted" ]; then
+        echo "Unformatted Go files:"
+        echo "$unformatted"
+        echo "Run 'just fmt' to fix."
+        exit 1
+    fi
+
 # build + vet + test
 check: build vet test
 
@@ -81,8 +97,8 @@ prune:
     go clean ./...
     @echo "Pruned. Run 'just run' to start fresh."
 
-# test, build, commit all, and push (wip)
-push: test build
+# format, vet, test, build, commit all, and push (wip)
+push: fmt vet test build
     git add -A && git commit -m "wip" && git push
 
 # tidy go modules

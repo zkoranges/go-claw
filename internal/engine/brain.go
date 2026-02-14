@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
@@ -321,8 +320,6 @@ func defaultModelForProvider(provider string) string {
 		return "gpt-4o-mini"
 	case "openrouter":
 		return "anthropic/claude-sonnet-4-5-20250929"
-	case "google", "":
-		return "gemini-2.5-flash"
 	default:
 		return "gemini-2.5-flash"
 	}
@@ -745,42 +742,6 @@ func (b *GenkitBrain) RegisterSkill(name string) {
 	}
 }
 
-// RegisterLoadedSkills registers eligible skills as metadata-only entries.
-// Full SKILL.md instructions are loaded on-demand when a skill activates.
-func (b *GenkitBrain) RegisterLoadedSkills(items []skills.LoadedSkill) {
-	b.skillMu.Lock()
-	defer b.skillMu.Unlock()
-
-	for _, ls := range items {
-		if !ls.Eligible {
-			continue
-		}
-		// Directory name is treated as the canonical skill name (TODO Phase 2.2).
-		name := filepath.Base(strings.TrimSpace(ls.SourceDir))
-		if name == "." || name == "" {
-			name = strings.TrimSpace(ls.Skill.Name)
-		}
-		key := strings.ToLower(name)
-		if key == "" {
-			continue
-		}
-		typ := "instruction"
-		if strings.TrimSpace(ls.Skill.Script) != "" {
-			typ = "legacy"
-		}
-		b.loadedSkills[key] = &skillEntry{
-			Name:        name,
-			Description: strings.TrimSpace(ls.Skill.Description),
-			Type:        typ,
-			Source:      strings.TrimSpace(ls.Source),
-			SourceDir:   strings.TrimSpace(ls.SourceDir),
-			// Metadata-only at startup:
-			InstructionsLoaded: false,
-			Instructions:       "",
-		}
-	}
-}
-
 // ReplaceLoadedSkills atomically replaces the non-WASM skill catalog
 // (instruction/legacy), preserving any registered WASM modules.
 // The write lock is held for the entire operation to prevent a transient
@@ -799,7 +760,7 @@ func (b *GenkitBrain) ReplaceLoadedSkills(items []skills.LoadedSkill) {
 		}
 	}
 
-	// Phase 2: insert new entries (inlined from RegisterLoadedSkills).
+	// Phase 2: insert new entries.
 	for _, ls := range items {
 		if !ls.Eligible {
 			continue
@@ -1071,8 +1032,7 @@ func (b *GenkitBrain) respondWithRandomSkill(ctx context.Context) (string, bool)
 	}
 
 	// Safe fallback if module export signature doesn't match expected ABI.
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	return fmt.Sprintf("Random number: %d (via random skill fallback)", rng.Int31n(1000)), true
+	return fmt.Sprintf("Random number: %d (via random skill fallback)", rand.Int31n(1000)), true
 }
 
 // priceCompareREs matches patterns like "X vs Y", "X versus Y", "X compared to Y".

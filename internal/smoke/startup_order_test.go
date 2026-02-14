@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func buildIronclawBinary(t *testing.T) string {
+func buildGoclawBinary(t *testing.T) string {
 	t.Helper()
 	root := moduleRoot(t)
 	outPath := filepath.Join(t.TempDir(), "goclaw")
@@ -41,7 +41,7 @@ func pickFreeAddr(t *testing.T) string {
 }
 
 func TestSmoke_StartupPhasesFollowRequiredOrder(t *testing.T) {
-	bin := buildIronclawBinary(t)
+	bin := buildGoclawBinary(t)
 	home := t.TempDir()
 	addr := pickFreeAddr(t)
 
@@ -132,7 +132,7 @@ func TestSmoke_StartupPhasesFollowRequiredOrder(t *testing.T) {
 }
 
 func TestSmoke_StartupFailureEmitsReasonCode(t *testing.T) {
-	bin := buildIronclawBinary(t)
+	bin := buildGoclawBinary(t)
 	home := t.TempDir()
 
 	invalidPolicy := "allow_capabilities:\n  - acp.invalid\n"

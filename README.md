@@ -1,5 +1,13 @@
 # GoClaw
 
+[![CI](https://github.com/zkoranges/go-claw/actions/workflows/ci.yml/badge.svg)](https://github.com/zkoranges/go-claw/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/Status-WIP-orange)](#status)
+
+> **Work in progress.** GoClaw is under active development. APIs, config formats, and internals may change without notice. Not yet recommended for production use.
+
 A durable local orchestration kernel for AI agents. Single binary, single user, crash-recoverable.
 
 GoClaw runs a local daemon that accepts agent tasks over a WebSocket protocol (ACP), persists them in SQLite, executes them through an LLM brain with tool access, and guarantees that no work is silently lost — even under `kill -9`.
@@ -8,38 +16,30 @@ GoClaw runs a local daemon that accepts agent tasks over a WebSocket protocol (A
 
 - **Durable task queue** backed by SQLite WAL. Tasks survive crashes and restarts. Lease-based ownership with automatic recovery of orphaned work.
 - **8-state task machine** (QUEUED, CLAIMED, RUNNING, RETRY_WAIT, SUCCEEDED, FAILED, CANCELED, DEAD_LETTER) with transactional state transitions and append-only event audit trail.
+- **Multi-agent support.** Named agents with independent brains, worker pools, and task queues. Agents can be defined in `config.yaml` and hot-reloaded at runtime.
 - **ACP WebSocket gateway** implementing JSON-RPC 2.0 with version negotiation, bearer token auth, cursor-based replay, and explicit backpressure signaling.
 - **LLM brain** via Genkit + Gemini (with multi-provider failover to Anthropic, OpenAI, and OpenRouter). Tool calls are schema-validated before execution.
 - **Default-deny policy engine** with capability-based access control and domain allowlists. Policy hot-reloads via fsnotify; invalid config fails closed.
 - **WASM skill sandbox** via wazero with memory limits, CPU fuel metering, execution timeouts, fault-count quarantine, and two-phase hot reload with rollback.
 - **Built-in tools**: shell execution (with optional Docker sandboxing), filesystem operations, web search (Brave / Perplexity / DuckDuckGo), MCP client, process spawning.
-- **Operational TUI** (Bubbletea) showing queue depth, active lanes, retry pressure, approval broker requests.
+- **Operational TUI** (Bubbletea) with interactive chat, agent switching (`/agent`), skill management, and model selection.
 - **Cron scheduler** for recurring tasks with 5-field cron expressions.
-- **Multi-channel input**: Telegram bot integration, OpenAI-compatible `/v1/chat/completions` endpoint.
-- **Structured observability**: JSON logs, dual-write audit (file + DB), `/healthz` and `/metrics` endpoints, incident export bundles.
+- **Multi-channel input**: Telegram bot integration (with `@agent` routing), OpenAI-compatible `/v1/chat/completions` endpoint.
+- **Structured observability**: JSON logs, dual-write audit (file + DB), `/healthz` and `/metrics` endpoints.
 
 ## What it does not do
 
-- **No browser automation.** No Chromium, no Puppeteer, no headless rendering. (NG-001)
-- **No distributed clustering.** Single-node, single-process. No multi-node scheduling, no consensus protocol. (NG-002)
-- **No multi-tenancy.** One user context per daemon process. No user isolation within a single instance. (NG-003)
+- **No browser automation.** No Chromium, no Puppeteer, no headless rendering.
+- **No distributed clustering.** Single-node, single-process. No multi-node scheduling, no consensus protocol.
+- **No multi-tenancy.** One user context per daemon process. No user isolation within a single instance.
 - **No mobile or desktop clients.** TUI and WebSocket are the interfaces.
 - **No guaranteed exactly-once execution.** Semantics are at-least-once for tasks, at-most-once per idempotency key for side effects. Downstream tools must be idempotent.
 
 ## Status
 
-**v0.1** — specification-complete, pre-release.
+**v0.1-dev** — under active development.
 
-~17k lines of Go (source) + ~15k lines of tests across 22 packages. 253 test functions. Spec: [SPEC.md](SPEC.md) (v2.0.0, 90+ normative requirements with traceability hooks).
-
-See [FEATURE_PARITY.md](FEATURE_PARITY.md) for comparison against the OpenClaw reference implementation. Summary:
-
-| Category | GoClaw | GoClaw-Only | Notes |
-|---|---|---|---|
-| Persistence & Reliability | 15/15 | 15 | All GoClaw-originated. OpenClaw has 0. |
-| Security | 16/23 | 6 | Remaining gaps are OpenClaw-specific hardening |
-| Search & Tools | 9/11 | 4 | Full tool chain operational |
-| Gateway | 11/18 | 4 | ACP + REST + OpenAI-compat |
+The core subsystems (persistence, engine, gateway, policy, WASM sandbox, multi-agent) are implemented and tested. The project is undergoing refactoring and is not yet stable. Spec: [SPEC.md](SPEC.md).
 
 ## Build and run
 
@@ -51,6 +51,7 @@ just run            # build + launch (interactive TUI)
 just run-headless   # build + launch (no TUI, logs to stdout)
 just test           # go test ./... -count=1
 just check          # build + vet + test
+just fmt            # format all Go files
 ```
 
 First run creates `~/.goclaw/` with `config.yaml`, `policy.yaml`, `SOUL.md`, `auth.token`, and the SQLite database.
@@ -61,11 +62,12 @@ All state lives under `GOCLAW_HOME` (default `~/.goclaw`):
 
 ```
 ~/.goclaw/
-  config.yaml       # Runtime config (YAML, env var overlay)
+  config.yaml       # Runtime config (YAML, env var overlay, agent hot-reload)
   policy.yaml       # Capability allowlists, domain allowlists
   goclaw.db         # SQLite (WAL mode, synchronous=FULL)
   auth.token        # Bearer token (auto-generated on first run)
   SOUL.md           # Agent identity (generated by genesis wizard)
+  skills/           # User WASM skills and SKILL.md definitions
   logs/
     system.jsonl    # Structured operational logs
     audit.jsonl     # Append-only security audit log
@@ -78,7 +80,7 @@ Precedence: environment variables > `config.yaml` > defaults.
 ```
 cmd/goclaw/          Daemon entry point, CLI subcommands
 internal/
-  persistence/       SQLite store, schema migrations (v2-v6), task queue
+  persistence/       SQLite store, schema migrations, task queue
   engine/            Task execution engine, worker lanes, brain integration
   gateway/           ACP WebSocket server, REST API, OpenAI-compat endpoint
   policy/            Default-deny policy engine, hot-reload
@@ -103,13 +105,9 @@ internal/
 
 | Document | Purpose |
 |---|---|
-| [SPEC.md](SPEC.md) | Normative system specification (v2.0.0) |
+| [SPEC.md](SPEC.md) | System specification |
 | [PDR.md](PDR.md) | Product design rationale |
-| [FEATURE_PARITY.md](FEATURE_PARITY.md) | Parity tracking vs OpenClaw |
-| [docs/RELEASE_READINESS_CHECKLIST.md](docs/RELEASE_READINESS_CHECKLIST.md) | Release gate criteria |
-| [docs/CODEBASE_AUDIT_ISSUES.md](docs/CODEBASE_AUDIT_ISSUES.md) | Known issues and risks (28 findings) |
-| [docs/parity/parity.yaml](docs/parity/parity.yaml) | Row-level parity data |
 
 ## License
 
-Not yet determined.
+[MIT](LICENSE)

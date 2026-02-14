@@ -99,4 +99,4 @@ internal/
 - YAML config via `gopkg.in/yaml.v3`
 - Error wrapping with `fmt.Errorf("context: %w", err)`
 - SPEC requirement traceability comments: `// GC-SPEC-XXX-NNN: description`
-- Backward-compatible type aliases: `TaskStatusPending = TaskStatusQueued`, `TaskStatusCompleted = TaskStatusSucceeded`
+- Use canonical status names: `TaskStatusQueued`, `TaskStatusSucceeded` (no aliases)

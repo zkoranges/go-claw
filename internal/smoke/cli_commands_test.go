@@ -15,7 +15,7 @@ import (
 )
 
 func TestSmoke_CLIStatusOutputsHealthzJSON(t *testing.T) {
-	bin := buildIronclawBinary(t)
+	bin := buildGoclawBinary(t)
 	home := t.TempDir()
 	addr := pickFreeAddr(t)
 
@@ -85,7 +85,7 @@ func TestSmoke_CLIStatusOutputsHealthzJSON(t *testing.T) {
 }
 
 func TestSmoke_CLIImportWritesConfigYAML(t *testing.T) {
-	bin := buildIronclawBinary(t)
+	bin := buildGoclawBinary(t)
 	home := t.TempDir()
 	work := t.TempDir()
 

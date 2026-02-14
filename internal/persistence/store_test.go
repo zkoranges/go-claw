@@ -186,8 +186,8 @@ func TestStore_ClaimAndRecoverRunningTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if got.Status != persistence.TaskStatusPending {
-		t.Fatalf("expected recovered task status PENDING, got %s", got.Status)
+	if got.Status != persistence.TaskStatusQueued {
+		t.Fatalf("expected recovered task status QUEUED, got %s", got.Status)
 	}
 }
 
@@ -219,7 +219,7 @@ func TestStore_HistoryRoundTrip(t *testing.T) {
 	}
 }
 
-func TestStore_DefaultPathUsesIronclawHome(t *testing.T) {
+func TestStore_DefaultPathUsesGoclawHome(t *testing.T) {
 	// [SPEC: SPEC-CONFIG-DIR-1] [PDR: V-4]
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

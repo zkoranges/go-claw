@@ -45,7 +45,7 @@ func TestBrain_SkillMetadataOnlyAtStartup(t *testing.T) {
 		Soul:   "You are a test assistant.",
 	})
 
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill: legacy.Skill{
 				Name:         "demo",
@@ -97,7 +97,7 @@ Say hello.
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill: legacy.Skill{
 				Name:        "hello",
@@ -138,7 +138,7 @@ func TestBrain_IneligibleSkillNotInjected(t *testing.T) {
 		Soul:   "You are a test assistant.",
 	})
 
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill: legacy.Skill{
 				Name:        "nope",
@@ -330,7 +330,7 @@ Greet the user warmly.
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill: legacy.Skill{
 				Name:        "greeter",
@@ -388,7 +388,7 @@ func TestBrain_ConcurrentReplaceAndMatch(t *testing.T) {
 	})
 
 	// Seed the brain with an initial set of skills.
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill:     legacy.Skill{Name: "alpha", Description: "Alpha skill"},
 			Source:    "project",
@@ -458,7 +458,7 @@ func TestMatchSkillForPrompt_WordBoundary(t *testing.T) {
 		Soul:   "test",
 	})
 
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill:  legacy.Skill{Name: "go", Description: "Go skill"},
 			Source: "project", SourceDir: "/tmp/go", Eligible: true,
@@ -536,7 +536,7 @@ func TestMatchSkillForPrompt_DeterministicTie(t *testing.T) {
 	})
 
 	// Register two skills with the same name length.
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill:  legacy.Skill{Name: "beta", Description: "Beta skill"},
 			Source: "project", SourceDir: "/tmp/beta", Eligible: true,
@@ -570,7 +570,7 @@ func TestReplaceLoadedSkills_Atomic(t *testing.T) {
 	b.RegisterSkill("mymodule")
 
 	// Register initial instruction skills.
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill:  legacy.Skill{Name: "oldskill", Description: "Old skill"},
 			Source: "project", SourceDir: "/tmp/oldskill", Eligible: true,
@@ -611,7 +611,7 @@ func TestReplaceLoadedSkills_NeverEmpty(t *testing.T) {
 	})
 
 	// Pre-populate with a skill.
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill:  legacy.Skill{Name: "persist", Description: "Persist skill"},
 			Source: "project", SourceDir: "/tmp/persist", Eligible: true,
@@ -696,7 +696,7 @@ Stream skill activated.
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill: legacy.Skill{
 				Name:        "streamer",
@@ -808,7 +808,7 @@ Dedup test instructions.
 		t.Fatalf("write SKILL.md: %v", err)
 	}
 
-	b.RegisterLoadedSkills([]skills.LoadedSkill{
+	b.ReplaceLoadedSkills([]skills.LoadedSkill{
 		{
 			Skill: legacy.Skill{
 				Name:        "dedup",

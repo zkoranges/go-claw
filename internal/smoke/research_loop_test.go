@@ -70,7 +70,7 @@ func TestSmoke_E2EResearchLoopCreatesToolSubTasks(t *testing.T) {
 		_, _ = w.Write([]byte("RTX 4090 price is $1599\n"))
 	})
 
-	bin := buildIronclawBinary(t)
+	bin := buildGoclawBinary(t)
 	home := t.TempDir()
 	addr := pickFreeAddr(t)
 	token := "smoke-research-token"

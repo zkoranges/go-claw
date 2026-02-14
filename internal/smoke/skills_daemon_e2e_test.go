@@ -236,7 +236,7 @@ func waitForSkill(t *testing.T, conn *websocket.Conn, name string, wantPresent b
 
 func TestSmoke_SkillsDaemonE2E_StatusInstallRemove(t *testing.T) {
 	requireGit(t)
-	bin := buildIronclawBinary(t)
+	bin := buildGoclawBinary(t)
 
 	home := t.TempDir()
 	addr := pickFreeAddr(t)

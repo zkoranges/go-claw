@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -72,10 +73,6 @@ const (
 	TaskStatusFailed     TaskStatus = "FAILED"
 	TaskStatusCanceled   TaskStatus = "CANCELED"
 	TaskStatusDeadLetter TaskStatus = "DEAD_LETTER"
-
-	// Backward-compatible aliases used by existing call sites/tests.
-	TaskStatusPending   = TaskStatusQueued
-	TaskStatusCompleted = TaskStatusSucceeded
 )
 
 var allowedTransitions = map[TaskStatus]map[TaskStatus]struct{}{
@@ -285,7 +282,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 
 	// Known predecessor checksums that can be upgraded to current schema.
 	knownPriorChecksumsV2 := map[string]bool{
-		"ic-v1-2026-02-11-lease": true,
+		"gc-v1-2026-02-11-lease": true,
 	}
 
 	// If we're already at the latest schema, verify checksum and apply backfills only.
@@ -307,39 +304,31 @@ func (s *Store) initSchema(ctx context.Context) error {
 	}
 
 	// Upgrading from an earlier schema. Validate the checksum for the maxVersion we are upgrading from.
-	if maxVersion == schemaVersionV2 {
+	versionChecksums := []struct {
+		version  int
+		checksum string
+	}{
+		{schemaVersionV2, schemaChecksumV2},
+		{schemaVersionV3, schemaChecksumV3},
+		{schemaVersionV4, schemaChecksumV4},
+		{schemaVersionV5, schemaChecksumV5},
+	}
+	matched := false
+	for _, vc := range versionChecksums {
+		if maxVersion != vc.version {
+			continue
+		}
+		matched = true
 		var existingChecksum string
-		if err := tx.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE version = ?;`, schemaVersionV2).Scan(&existingChecksum); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE version = ?;`, vc.version).Scan(&existingChecksum); err != nil {
 			return fmt.Errorf("read schema migration checksum: %w", err)
 		}
-		if existingChecksum != schemaChecksumV2 && !knownPriorChecksumsV2[existingChecksum] {
-			return fmt.Errorf("schema checksum mismatch for version %d: got %q want %q", schemaVersionV2, existingChecksum, schemaChecksumV2)
+		if existingChecksum != vc.checksum && !knownPriorChecksumsV2[existingChecksum] {
+			return fmt.Errorf("schema checksum mismatch for version %d: got %q want %q", vc.version, existingChecksum, vc.checksum)
 		}
-	} else if maxVersion == schemaVersionV3 {
-		var existingChecksum string
-		if err := tx.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE version = ?;`, schemaVersionV3).Scan(&existingChecksum); err != nil {
-			return fmt.Errorf("read schema migration checksum: %w", err)
-		}
-		if existingChecksum != schemaChecksumV3 {
-			return fmt.Errorf("schema checksum mismatch for version %d: got %q want %q", schemaVersionV3, existingChecksum, schemaChecksumV3)
-		}
-	} else if maxVersion == schemaVersionV4 {
-		var existingChecksum string
-		if err := tx.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE version = ?;`, schemaVersionV4).Scan(&existingChecksum); err != nil {
-			return fmt.Errorf("read schema migration checksum: %w", err)
-		}
-		if existingChecksum != schemaChecksumV4 {
-			return fmt.Errorf("schema checksum mismatch for version %d: got %q want %q", schemaVersionV4, existingChecksum, schemaChecksumV4)
-		}
-	} else if maxVersion == schemaVersionV5 {
-		var existingChecksum string
-		if err := tx.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE version = ?;`, schemaVersionV5).Scan(&existingChecksum); err != nil {
-			return fmt.Errorf("read schema migration checksum: %w", err)
-		}
-		if existingChecksum != schemaChecksumV5 {
-			return fmt.Errorf("schema checksum mismatch for version %d: got %q want %q", schemaVersionV5, existingChecksum, schemaChecksumV5)
-		}
-	} else if maxVersion != 0 {
+		break
+	}
+	if !matched && maxVersion != 0 {
 		return fmt.Errorf("db schema version %d is older than supported minimum %d", maxVersion, schemaVersionV2)
 	}
 
@@ -780,15 +769,6 @@ func canTransition(from, to TaskStatus) bool {
 	return ok
 }
 
-func containsStatus(statuses []TaskStatus, status TaskStatus) bool {
-	for _, s := range statuses {
-		if s == status {
-			return true
-		}
-	}
-	return false
-}
-
 func scanTask(scanFn func(dest ...any) error, task *Task) error {
 	var leaseExpires sql.NullTime
 	var lastErrorCode sql.NullString
@@ -867,7 +847,7 @@ func (s *Store) transitionTaskTx(
 		}
 		return false, fmt.Errorf("select task for transition: %w", err)
 	}
-	if !containsStatus(allowedFrom, current) {
+	if !slices.Contains(allowedFrom, current) {
 		return false, nil
 	}
 	if !canTransition(current, to) {
@@ -1060,6 +1040,10 @@ func (s *Store) ListTaskEventsFrom(ctx context.Context, sessionID string, fromEv
 }
 
 func (s *Store) CreateTask(ctx context.Context, sessionID, payload string) (string, error) {
+	return s.createTask(ctx, "", sessionID, payload)
+}
+
+func (s *Store) createTask(ctx context.Context, agentID, sessionID, payload string) (string, error) {
 	taskID := uuid.NewString()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1067,12 +1051,16 @@ func (s *Store) CreateTask(ctx context.Context, sessionID, payload string) (stri
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	agent := agentID
+	if agent == "" {
+		agent = "default"
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO tasks (
-			id, session_id, type, status, attempt, max_attempts, available_at, payload, created_at, updated_at
+			id, session_id, type, status, attempt, max_attempts, available_at, agent_id, payload, created_at, updated_at
 		)
-		VALUES (?, ?, 'chat', ?, 0, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
-	`, taskID, sessionID, TaskStatusQueued, defaultMaxAttempts, payload); err != nil {
+		VALUES (?, ?, 'chat', ?, 0, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+	`, taskID, sessionID, TaskStatusQueued, defaultMaxAttempts, agent, payload); err != nil {
 		return "", fmt.Errorf("create task: %w", err)
 	}
 	if err := s.appendTaskEventTx(ctx, tx, taskID, sessionID, "", TaskStatusQueued, "task.enqueued", `{"reason":"create_task"}`); err != nil {
@@ -1085,6 +1073,10 @@ func (s *Store) CreateTask(ctx context.Context, sessionID, payload string) (stri
 }
 
 func (s *Store) ClaimNextPendingTask(ctx context.Context) (*Task, error) {
+	return s.claimNextPendingTask(ctx, "")
+}
+
+func (s *Store) claimNextPendingTask(ctx context.Context, agentID string) (*Task, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin claim tx: %w", err)
@@ -1092,31 +1084,32 @@ func (s *Store) ClaimNextPendingTask(ctx context.Context) (*Task, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	var task Task
-	row := tx.QueryRowContext(ctx, `
-		SELECT
-			id,
-			session_id,
-			type,
-			status,
-			attempt,
-			max_attempts,
-			available_at,
-			COALESCE(last_error_code, ''),
-			poison_count,
-			payload,
-			COALESCE(result, ''),
-			COALESCE(error, ''),
-			COALESCE(lease_owner, ''),
-			lease_expires_at,
-			created_at,
-			updated_at,
-			COALESCE(agent_id, 'default')
-		FROM tasks
-		WHERE status = ?
-		  AND available_at <= CURRENT_TIMESTAMP
-		ORDER BY priority DESC, created_at ASC, id ASC
-		LIMIT 1;
-	`, TaskStatusQueued)
+	var query string
+	var args []any
+	if agentID == "" {
+		query = `
+			SELECT id, session_id, type, status, attempt, max_attempts, available_at,
+				COALESCE(last_error_code, ''), poison_count, payload,
+				COALESCE(result, ''), COALESCE(error, ''), COALESCE(lease_owner, ''),
+				lease_expires_at, created_at, updated_at, COALESCE(agent_id, 'default')
+			FROM tasks
+			WHERE status = ? AND available_at <= CURRENT_TIMESTAMP
+			ORDER BY priority DESC, created_at ASC, id ASC
+			LIMIT 1;`
+		args = []any{TaskStatusQueued}
+	} else {
+		query = `
+			SELECT id, session_id, type, status, attempt, max_attempts, available_at,
+				COALESCE(last_error_code, ''), poison_count, payload,
+				COALESCE(result, ''), COALESCE(error, ''), COALESCE(lease_owner, ''),
+				lease_expires_at, created_at, updated_at, COALESCE(agent_id, 'default')
+			FROM tasks
+			WHERE status = ? AND agent_id = ? AND available_at <= CURRENT_TIMESTAMP
+			ORDER BY priority DESC, created_at ASC, id ASC
+			LIMIT 1;`
+		args = []any{TaskStatusQueued, agentID}
+	}
+	row := tx.QueryRowContext(ctx, query, args...)
 	if scanErr := scanTask(row.Scan, &task); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			_ = tx.Rollback()
@@ -1125,17 +1118,9 @@ func (s *Store) ClaimNextPendingTask(ctx context.Context) (*Task, error) {
 		return nil, fmt.Errorf("select pending task: %w", scanErr)
 	}
 
-	ok, err := s.transitionTaskTx(
-		ctx,
-		tx,
-		task.ID,
-		[]TaskStatus{TaskStatusQueued},
-		TaskStatusClaimed,
-		"task.claimed",
-		`{"reason":"claim_next_pending"}`,
-		nil,
-		nil,
-	)
+	ok, err := s.transitionTaskTx(ctx, tx, task.ID,
+		[]TaskStatus{TaskStatusQueued}, TaskStatusClaimed,
+		"task.claimed", `{"reason":"claim_next_pending"}`, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("claim task transition: %w", err)
 	}
@@ -1424,20 +1409,13 @@ func retryDelay(taskID string, attempt int) time.Duration {
 		jitterMax = time.Millisecond
 	}
 	jitterHash := hashString(taskID + ":" + strconv.Itoa(attempt))
-	jitterSource, _ := strconv.ParseUint(jitterHash[:minInt(len(jitterHash), 8)], 16, 64)
+	jitterSource, _ := strconv.ParseUint(jitterHash[:min(len(jitterHash), 8)], 16, 64)
 	jitter := time.Duration(int64(jitterSource % uint64(jitterMax)))
 	delay := base + jitter
 	if delay > retryMaxDelay {
 		delay = retryMaxDelay
 	}
 	return delay
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // HandleTaskFailure applies retry/backoff/DLQ decisions for a RUNNING task.
@@ -2815,86 +2793,11 @@ func (s *Store) DeleteAgent(ctx context.Context, agentID string) error {
 }
 
 func (s *Store) CreateTaskForAgent(ctx context.Context, agentID, sessionID, payload string) (string, error) {
-	taskID := uuid.NewString()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("begin create task for agent tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tasks (
-			id, session_id, type, status, attempt, max_attempts, available_at, agent_id, payload, created_at, updated_at
-		)
-		VALUES (?, ?, 'chat', ?, 0, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
-	`, taskID, sessionID, TaskStatusQueued, defaultMaxAttempts, agentID, payload); err != nil {
-		return "", fmt.Errorf("create task for agent: %w", err)
-	}
-	if err := s.appendTaskEventTx(ctx, tx, taskID, sessionID, "", TaskStatusQueued, "task.enqueued", `{"reason":"create_task_for_agent"}`); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit create task for agent tx: %w", err)
-	}
-	return taskID, nil
+	return s.createTask(ctx, agentID, sessionID, payload)
 }
 
 func (s *Store) ClaimNextPendingTaskForAgent(ctx context.Context, agentID string) (*Task, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin claim for agent tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var task Task
-	row := tx.QueryRowContext(ctx, `
-		SELECT
-			id, session_id, type, status, attempt, max_attempts, available_at,
-			COALESCE(last_error_code, ''), poison_count, payload,
-			COALESCE(result, ''), COALESCE(error, ''), COALESCE(lease_owner, ''),
-			lease_expires_at, created_at, updated_at, COALESCE(agent_id, 'default')
-		FROM tasks
-		WHERE status = ?
-		  AND agent_id = ?
-		  AND available_at <= CURRENT_TIMESTAMP
-		ORDER BY priority DESC, created_at ASC, id ASC
-		LIMIT 1;
-	`, TaskStatusQueued, agentID)
-	if scanErr := scanTask(row.Scan, &task); scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
-			_ = tx.Rollback()
-			return nil, nil
-		}
-		return nil, fmt.Errorf("select pending task for agent: %w", scanErr)
-	}
-
-	ok, err := s.transitionTaskTx(ctx, tx, task.ID,
-		[]TaskStatus{TaskStatusQueued}, TaskStatusClaimed,
-		"task.claimed", `{"reason":"worker_claim_for_agent"}`, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("claim task for agent: %w", err)
-	}
-	if !ok {
-		_ = tx.Rollback()
-		return nil, nil
-	}
-
-	leaseOwner := uuid.NewString()
-	leaseExpires := time.Now().Add(defaultLeaseDuration)
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE tasks SET lease_owner = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?;
-	`, leaseOwner, leaseExpires, task.ID); err != nil {
-		return nil, fmt.Errorf("set lease for agent: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit claim for agent tx: %w", err)
-	}
-	task.Status = TaskStatusClaimed
-	task.LeaseOwner = leaseOwner
-	task.LeaseExpiresAt = &leaseExpires
-	return &task, nil
+	return s.claimNextPendingTask(ctx, agentID)
 }
 
 func (s *Store) QueueDepthForAgent(ctx context.Context, agentID string) (int, error) {
