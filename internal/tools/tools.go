@@ -80,6 +80,10 @@ func (r *Registry) RegisterAll(g *genkit.Genkit) {
 	if r.Store != nil {
 		spawnTool := registerSpawn(g, r)
 		r.Tools = append(r.Tools, spawnTool)
+		delegateTool := registerDelegate(g, r)
+		r.Tools = append(r.Tools, delegateTool)
+		msgTools := registerMessaging(g, r)
+		r.Tools = append(r.Tools, msgTools...)
 	}
 }
 

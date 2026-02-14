@@ -89,7 +89,7 @@ internal/
 - **SQLite ALTER TABLE**: `ADD COLUMN` cannot use `DEFAULT CURRENT_TIMESTAMP` — use nullable columns
 - **json.Unmarshal**: does NOT clear struct fields absent from JSON — use fresh struct per read
 - **coder/websocket**: context cancellation poisons TCP connection deadlines
-- **Schema version**: currently v6 (`schemaVersionV6`, checksum `gc-v6-2026-02-14-multi-agent`). Update both constant and checksum when adding migrations
+- **Schema version**: currently v7 (`schemaVersionV7`, checksum `gc-v7-2026-02-14-agent-messages`). Update both constant and checksum when adding migrations
 - **Brain nil guard**: `RegisterTestAgent` creates `RunningAgent` with `Brain: nil`. Any loop over `ListRunningAgents()` that calls Brain methods must guard with `if ra.Brain != nil`
 
 ## Code Style

@@ -40,8 +40,12 @@ const (
 	schemaVersionV6  = 6
 	schemaChecksumV6 = "gc-v6-2026-02-14-multi-agent"
 
-	schemaVersionLatest  = schemaVersionV6
-	schemaChecksumLatest = schemaChecksumV6
+	// v0.1 schema v7: adds agent_messages table for inter-agent messaging.
+	schemaVersionV7  = 7
+	schemaChecksumV7 = "gc-v7-2026-02-14-agent-messages"
+
+	schemaVersionLatest  = schemaVersionV7
+	schemaChecksumLatest = schemaChecksumV7
 
 	defaultLeaseDuration = 30 * time.Second
 
@@ -312,6 +316,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		{schemaVersionV3, schemaChecksumV3},
 		{schemaVersionV4, schemaChecksumV4},
 		{schemaVersionV5, schemaChecksumV5},
+		{schemaVersionV6, schemaChecksumV6},
 	}
 	matched := false
 	for _, vc := range versionChecksums {
@@ -482,6 +487,15 @@ func (s *Store) initSchema(ctx context.Context) error {
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
+		// v7: agent_messages table for inter-agent messaging.
+		`CREATE TABLE IF NOT EXISTS agent_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			from_agent TEXT NOT NULL,
+			to_agent TEXT NOT NULL,
+			content TEXT NOT NULL,
+			read_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, stmt := range tableStatements {
@@ -508,6 +522,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(enabled, next_run_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_agent_status ON tasks(agent_id, status, available_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_agent, read_at);`,
 	}
 
 	for _, stmt := range indexStatements {
@@ -2823,4 +2838,90 @@ func (s *Store) QueueDepthForAgent(ctx context.Context, agentID string) (int, er
 		return 0, fmt.Errorf("queue depth for agent: %w", err)
 	}
 	return pending, nil
+}
+
+// AgentMessage represents a row in the agent_messages table.
+type AgentMessage struct {
+	ID        int64     `json:"id"`
+	FromAgent string    `json:"from_agent"`
+	ToAgent   string    `json:"to_agent"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// SendAgentMessage stores a message from one agent to another.
+func (s *Store) SendAgentMessage(ctx context.Context, from, to, content string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO agent_messages (from_agent, to_agent, content) VALUES (?, ?, ?);
+	`, from, to, content)
+	if err != nil {
+		return fmt.Errorf("send agent message: %w", err)
+	}
+	return nil
+}
+
+// ReadAgentMessages returns unread messages for an agent and marks them as read.
+// Uses a transaction to prevent duplicate delivery under concurrent access.
+func (s *Store) ReadAgentMessages(ctx context.Context, agentID string, limit int) ([]AgentMessage, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("read agent messages: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, from_agent, to_agent, content, created_at
+		FROM agent_messages
+		WHERE to_agent = ? AND read_at IS NULL
+		ORDER BY created_at ASC
+		LIMIT ?;
+	`, agentID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read agent messages: %w", err)
+	}
+	defer rows.Close()
+
+	var msgs []AgentMessage
+	var ids []string
+	for rows.Next() {
+		var m AgentMessage
+		if err := rows.Scan(&m.ID, &m.FromAgent, &m.ToAgent, &m.Content, &m.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan agent message: %w", err)
+		}
+		msgs = append(msgs, m)
+		ids = append(ids, strconv.FormatInt(m.ID, 10))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate agent messages: %w", err)
+	}
+
+	// Mark as read within the same transaction.
+	if len(ids) > 0 {
+		query := fmt.Sprintf(`UPDATE agent_messages SET read_at = CURRENT_TIMESTAMP WHERE id IN (%s);`,
+			strings.Join(ids, ","))
+		if _, err := tx.ExecContext(ctx, query); err != nil {
+			return nil, fmt.Errorf("mark messages read: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("read agent messages: commit: %w", err)
+	}
+
+	return msgs, nil
+}
+
+// PeekAgentMessages returns the count of unread messages for an agent.
+func (s *Store) PeekAgentMessages(ctx context.Context, agentID string) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM agent_messages WHERE to_agent = ? AND read_at IS NULL;
+	`, agentID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("peek agent messages: %w", err)
+	}
+	return count, nil
 }

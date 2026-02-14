@@ -1022,6 +1022,34 @@ func (s *tuiAgentSwitcher) ListAgentIDs() []string {
 	return ids
 }
 
+func (s *tuiAgentSwitcher) ListAgentInfo() []tui.AgentInfo {
+	configs := s.reg.ListAgents()
+	infos := make([]tui.AgentInfo, len(configs))
+	for i, c := range configs {
+		infos[i] = tui.AgentInfo{
+			ID:          c.AgentID,
+			DisplayName: c.DisplayName,
+			Emoji:       c.AgentEmoji,
+			Model:       c.Model,
+		}
+	}
+	return infos
+}
+
+func (s *tuiAgentSwitcher) CreateAgent(ctx context.Context, id, name, provider, model, soul string) error {
+	return s.reg.CreateAgent(ctx, agent.AgentConfig{
+		AgentID:     id,
+		DisplayName: name,
+		Provider:    provider,
+		Model:       model,
+		Soul:        soul,
+	})
+}
+
+func (s *tuiAgentSwitcher) RemoveAgent(ctx context.Context, id string) error {
+	return s.reg.RemoveAgent(ctx, id, 5*time.Second)
+}
+
 func fatalStartup(logger *slog.Logger, reasonCode string, err error) {
 	message := ""
 	if err != nil {

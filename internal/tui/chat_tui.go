@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/basket/go-claw/internal/config"
+	"github.com/basket/go-claw/internal/shared"
 	"github.com/basket/go-claw/internal/tokenutil"
 )
 
@@ -41,6 +42,7 @@ type chatMode int
 const (
 	chatModeChat chatMode = iota
 	chatModeModelSelector
+	chatModeAgentSelector
 )
 
 type chatModel struct {
@@ -58,8 +60,9 @@ type chatModel struct {
 	thinking   bool
 	spinnerIdx int
 
-	mode     chatMode
-	selector selectorModel
+	mode          chatMode
+	selector      selectorModel
+	agentSelector agentSelectorModel
 
 	input  []rune
 	cursor int // rune index within input
@@ -154,6 +157,45 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		if m.mode == chatModeAgentSelector {
+			updated, cmd := m.agentSelector.Update(msg)
+			as, ok := updated.(agentSelectorModel)
+			if ok {
+				m.agentSelector = as
+			}
+			if m.agentSelector.quit {
+				m.mode = chatModeChat
+				m.agentSelector = agentSelectorModel{}
+				return m, nil
+			}
+			if m.agentSelector.done {
+				agentID := m.agentSelector.selectedID
+				if agentID != "" && m.cc.Switcher != nil {
+					brain, name, emoji, err := m.cc.Switcher.SwitchAgent(agentID)
+					if err != nil {
+						m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error: %v", err)})
+					} else {
+						m.cc.Brain = brain
+						m.cc.AgentName = name
+						m.cc.AgentEmoji = emoji
+						m.cc.CurrentAgent = agentID
+						if name != "" && emoji != "" {
+							m.agentPrefix = fmt.Sprintf("%s %s", emoji, name)
+						} else if name != "" {
+							m.agentPrefix = name
+						} else {
+							m.agentPrefix = agentID
+						}
+						m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Switched to agent: %s", agentID)})
+					}
+				}
+				m.mode = chatModeChat
+				m.agentSelector = agentSelectorModel{}
+				return m, nil
+			}
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "ctrl+d":
 			return m, tea.Quit
@@ -177,8 +219,19 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Slash commands.
 			if strings.HasPrefix(line, "/") {
+				// /agents (no args) is interactive; embed the agent selector.
+				trimmed := strings.TrimSpace(line)
+				if (trimmed == "/agents" || trimmed == "/agent") && m.cc.Switcher != nil {
+					infos := m.cc.Switcher.ListAgentInfo()
+					if len(infos) > 0 {
+						m.agentSelector = newAgentSelector(infos, m.cc.CurrentAgent)
+						m.mode = chatModeAgentSelector
+						return m, nil
+					}
+				}
+
 				// /model (no args) is interactive; embed the selector in this program.
-				if strings.TrimSpace(line) == "/model" {
+				if trimmed == "/model" {
 					if m.cc.Cfg == nil {
 						m.history = append(m.history, chatEntry{role: chatRoleSystem, text: "Config not available for interactive selector."})
 						return m, nil
@@ -354,7 +407,9 @@ func respondCmd(ctx context.Context, cc ChatConfig, sessionID, prompt string) te
 		if cc.Brain == nil {
 			return brainReplyMsg{err: fmt.Errorf("brain not configured")}
 		}
-		reply, err := cc.Brain.Respond(ctx, sessionID, prompt)
+		// Inject agent ID into context so tools know which agent is calling.
+		agentCtx := shared.WithAgentID(ctx, cc.CurrentAgent)
+		reply, err := cc.Brain.Respond(agentCtx, sessionID, prompt)
 		return brainReplyMsg{reply: reply, err: err}
 	}
 }
@@ -369,6 +424,11 @@ func (m chatModel) View() string {
 	if m.mode == chatModeModelSelector {
 		// Selector view already includes its own help footer.
 		b.WriteString(m.selector.View())
+		return b.String()
+	}
+
+	if m.mode == chatModeAgentSelector {
+		b.WriteString(m.agentSelector.View())
 		return b.String()
 	}
 

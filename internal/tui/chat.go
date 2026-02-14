@@ -15,11 +15,22 @@ import (
 	"github.com/basket/go-claw/internal/tools"
 )
 
+// AgentInfo holds display information about an agent.
+type AgentInfo struct {
+	ID          string
+	DisplayName string
+	Emoji       string
+	Model       string
+}
+
 // AgentSwitcher allows the TUI to list and switch between agents.
 // Implemented in main.go to avoid importing the agent package here.
 type AgentSwitcher interface {
 	SwitchAgent(agentID string) (brain engine.Brain, name, emoji string, err error)
 	ListAgentIDs() []string
+	ListAgentInfo() []AgentInfo
+	CreateAgent(ctx context.Context, id, name, provider, model, soul string) error
+	RemoveAgent(ctx context.Context, id string) error
 }
 
 // ChatConfig holds the dependencies for the chat REPL.
@@ -86,8 +97,11 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "  Commands:")
 		fmt.Fprintln(out, "    /help                        Show this help message")
-		fmt.Fprintln(out, "    /agent                       List agents (current marked with *)")
-		fmt.Fprintln(out, "    /agent <id>                  Switch to a different agent")
+		fmt.Fprintln(out, "    /agents                      Interactive agent selector")
+		fmt.Fprintln(out, "    /agents list                 List agents (current marked with *)")
+		fmt.Fprintln(out, "    /agents new <id> [soul]      Create agent with personality")
+		fmt.Fprintln(out, "    /agents remove <id>          Remove an agent")
+		fmt.Fprintln(out, "    /agents team                 Quick-create a team of agents")
 		fmt.Fprintln(out, "    /skills                      List all skills with live status")
 		fmt.Fprintln(out, "    /skills setup <name>         Auto-configure a skill")
 		fmt.Fprintln(out, "    /allow <domain>              Allow a domain for web access (e.g. /allow reddit.com)")
@@ -139,7 +153,7 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 	case "/session":
 		fmt.Fprintf(out, "  Session: %s\n\n", sessionID)
 
-	case "/agent":
+	case "/agent", "/agents":
 		handleAgentCommand(arg, cc, out)
 
 	case "/skills":
@@ -399,7 +413,7 @@ func handleSkillSetup(name string, catalog []tools.SkillInfo, apiKeys map[string
 	fmt.Fprintln(out)
 }
 
-// handleAgentCommand processes /agent sub-commands.
+// handleAgentCommand processes /agents sub-commands.
 func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Switcher == nil {
 		fmt.Fprintln(out, "  Multi-agent not available.")
@@ -407,33 +421,164 @@ func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
 		return
 	}
 
-	if arg == "" {
-		// List all agents, mark current with *.
-		ids := cc.Switcher.ListAgentIDs()
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "  Agents:")
-		for _, id := range ids {
-			marker := "  "
-			if id == cc.CurrentAgent {
-				marker = "* "
-			}
-			fmt.Fprintf(out, "    %s%s\n", marker, id)
-		}
-		fmt.Fprintln(out)
-		return
+	parts := strings.SplitN(arg, " ", 2)
+	sub := ""
+	if len(parts) > 0 {
+		sub = strings.TrimSpace(strings.ToLower(parts[0]))
+	}
+	subArg := ""
+	if len(parts) > 1 {
+		subArg = strings.TrimSpace(parts[1])
 	}
 
-	// Switch to specified agent.
-	brain, name, emoji, err := cc.Switcher.SwitchAgent(arg)
-	if err != nil {
-		fmt.Fprintf(out, "  Error: %v\n\n", err)
-		return
+	switch sub {
+	case "", "list":
+		// List all agents, mark current with *.
+		infos := cc.Switcher.ListAgentInfo()
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  Agents:")
+		for _, info := range infos {
+			marker := "  "
+			if info.ID == cc.CurrentAgent {
+				marker = "* "
+			}
+			label := info.ID
+			if info.DisplayName != "" && info.DisplayName != info.ID {
+				label = fmt.Sprintf("%s (%s)", info.ID, info.DisplayName)
+			}
+			if info.Emoji != "" {
+				label = fmt.Sprintf("%s %s", info.Emoji, label)
+			}
+			model := info.Model
+			if model == "" {
+				model = "default"
+			}
+			fmt.Fprintf(out, "    %s%-30s %s\n", marker, label, model)
+		}
+		fmt.Fprintln(out)
+
+	case "new":
+		if subArg == "" {
+			fmt.Fprintln(out, "  Usage: /agents new <id> [soul text]")
+			fmt.Fprintln(out)
+			return
+		}
+		newParts := strings.SplitN(subArg, " ", 2)
+		newID := strings.TrimSpace(newParts[0])
+		soul := ""
+		if len(newParts) > 1 {
+			soul = strings.TrimSpace(newParts[1])
+		}
+		if soul == "" {
+			soul = fmt.Sprintf("You are a helpful AI assistant named %s.", newID)
+		}
+
+		// Inherit provider/model from current config.
+		provider := ""
+		model := ""
+		if cc.Cfg != nil {
+			provider = cc.Cfg.LLMProvider
+			model = cc.Cfg.GeminiModel
+		}
+
+		if err := cc.Switcher.CreateAgent(context.Background(), newID, newID, provider, model, soul); err != nil {
+			fmt.Fprintf(out, "  Error: %v\n\n", err)
+			return
+		}
+		fmt.Fprintf(out, "  Created agent: %s\n", newID)
+
+		// Auto-switch to the new agent.
+		brain, name, emoji, err := cc.Switcher.SwitchAgent(newID)
+		if err != nil {
+			fmt.Fprintf(out, "  Warning: created but failed to switch: %v\n\n", err)
+			return
+		}
+		cc.Brain = brain
+		cc.AgentName = name
+		cc.AgentEmoji = emoji
+		cc.CurrentAgent = newID
+		fmt.Fprintf(out, "  Switched to agent: %s\n\n", newID)
+
+	case "remove":
+		if subArg == "" {
+			fmt.Fprintln(out, "  Usage: /agents remove <id>")
+			fmt.Fprintln(out)
+			return
+		}
+		removeID := strings.TrimSpace(subArg)
+		if removeID == "default" {
+			fmt.Fprintln(out, "  Cannot remove the default agent.")
+			fmt.Fprintln(out)
+			return
+		}
+
+		if err := cc.Switcher.RemoveAgent(context.Background(), removeID); err != nil {
+			fmt.Fprintf(out, "  Error: %v\n\n", err)
+			return
+		}
+		fmt.Fprintf(out, "  Removed agent: %s\n", removeID)
+
+		// If we removed the current agent, switch to default.
+		if cc.CurrentAgent == removeID {
+			brain, name, emoji, err := cc.Switcher.SwitchAgent("default")
+			if err == nil {
+				cc.Brain = brain
+				cc.AgentName = name
+				cc.AgentEmoji = emoji
+				cc.CurrentAgent = "default"
+				fmt.Fprintf(out, "  Switched to agent: default\n")
+			}
+		}
+		fmt.Fprintln(out)
+
+	case "team":
+		// Quick-create a pre-built team of agents with distinct personalities.
+		teamAgents := []struct {
+			id   string
+			soul string
+		}{
+			{"researcher", "You are a research specialist. Your job is to find information, analyze data, and provide thorough research summaries. Be methodical and cite your sources."},
+			{"writer", "You are a writing specialist. Your job is to draft, edit, and polish text. You excel at clear communication, storytelling, and adapting tone for different audiences."},
+			{"critic", "You are a critical analyst. Your job is to review ideas and work products, identify weaknesses, suggest improvements, and play devil's advocate constructively."},
+		}
+
+		provider := ""
+		model := ""
+		if cc.Cfg != nil {
+			provider = cc.Cfg.LLMProvider
+			model = cc.Cfg.GeminiModel
+		}
+
+		created := 0
+		for _, ta := range teamAgents {
+			if err := cc.Switcher.CreateAgent(context.Background(), ta.id, ta.id, provider, model, ta.soul); err != nil {
+				fmt.Fprintf(out, "  Skipped %s: %v\n", ta.id, err)
+				continue
+			}
+			created++
+			fmt.Fprintf(out, "  Created: %s\n", ta.id)
+		}
+		if created > 0 {
+			fmt.Fprintf(out, "\n  Team created with %d agents. Use /agents to switch between them.\n", created)
+			fmt.Fprintln(out, "  Agents can collaborate using delegate_task and send_message tools.")
+		} else {
+			fmt.Fprintln(out, "  No new agents created (team may already exist).")
+		}
+		fmt.Fprintln(out)
+
+	default:
+		// Treat as agent ID to switch to (backward compat with /agent <id>).
+		brain, name, emoji, err := cc.Switcher.SwitchAgent(arg)
+		if err != nil {
+			fmt.Fprintf(out, "  Error: %v\n\n", err)
+			return
+		}
+		cc.Brain = brain
+		cc.AgentName = name
+		cc.AgentEmoji = emoji
+		cc.CurrentAgent = arg
+		fmt.Fprintf(out, "  Switched to agent: %s\n\n", arg)
 	}
-	cc.Brain = brain
-	cc.AgentName = name
-	cc.AgentEmoji = emoji
-	cc.CurrentAgent = arg
-	fmt.Fprintf(out, "  Switched to agent: %s\n\n", arg)
 }
 
 // handleModelCommand processes /model sub-commands.

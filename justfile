@@ -97,8 +97,12 @@ prune:
     go clean ./...
     @echo "Pruned. Run 'just run' to start fresh."
 
-# format, vet, test, build, commit all, and push (wip)
-push: fmt vet test build
+# regenerate parity scorecard
+scorecard:
+    go run tools/parity/scorecard/main.go -in docs/parity/parity.yaml -out docs/parity/scorecard.generated.md
+
+# format, vet, test, build, regenerate scorecard, commit all, and push (wip)
+push: fmt vet test build scorecard
     git add -A && git commit -m "wip" && git push
 
 # tidy go modules

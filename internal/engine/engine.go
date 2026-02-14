@@ -222,6 +222,8 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 	// GC-SPEC-RUN-004: Propagate trace_id for this task's execution scope.
 	traceID := shared.NewTraceID()
 	ctx = shared.WithTraceID(ctx, traceID)
+	// Propagate agent_id so tools (send_message, read_messages) know which agent is calling.
+	ctx = shared.WithAgentID(ctx, e.agentID)
 	slog.Info("task processing", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID)
 
 	taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
