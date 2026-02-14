@@ -130,6 +130,19 @@ func (w *Watcher) Start(ctx context.Context) error {
 					}
 				}
 
+				// Detect removal of an immediate skill subdirectory (e.g., skill dir deleted).
+				removedSkillDir := false
+				if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+					parent := filepath.Dir(ev.Name)
+					for _, d := range w.dirs {
+						absD, _ := filepath.Abs(d)
+						if absD != "" && parent == absD {
+							removedSkillDir = true
+							break
+						}
+					}
+				}
+
 				// Only fire updates for skill-relevant files.
 				base := filepath.Base(ev.Name)
 				sep := string(filepath.Separator)
@@ -138,9 +151,8 @@ func (w *Watcher) Start(ctx context.Context) error {
 					strings.Contains(ev.Name, sep+"scripts"+sep) ||
 					strings.Contains(ev.Name, sep+"references"+sep) ||
 					strings.Contains(ev.Name, sep+"assets"+sep)
-				// Creating a new skill directory should trigger a reload even if we miss the
-				// initial SKILL.md creation due to watcher registration races.
-				if !isRelevant && createdDir {
+				// Creating or removing a skill directory should trigger a reload.
+				if !isRelevant && (createdDir || removedSkillDir) {
 					isRelevant = true
 				}
 				if !isRelevant {
