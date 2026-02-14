@@ -50,8 +50,12 @@ const (
 	schemaVersionV8  = 8
 	schemaChecksumV8 = "gc-v8-2026-02-14-agent-history"
 
-	schemaVersionLatest  = schemaVersionV8
-	schemaChecksumLatest = schemaChecksumV8
+	// v0.2 schema v9: adds parent_task_id, token tracking, observability tables (PDR Phase 1).
+	schemaVersionV9  = 9
+	schemaChecksumV9 = "gc-v9-2026-02-14-coordination-foundation"
+
+	schemaVersionLatest  = schemaVersionV9
+	schemaChecksumLatest = schemaChecksumV9
 
 	defaultLeaseDuration = 30 * time.Second
 
@@ -377,6 +381,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		{schemaVersionV6, schemaChecksumV6},
 		{schemaVersionV7, schemaChecksumV7},
 		{schemaVersionV8, schemaChecksumV8},
+		{schemaVersionV9, schemaChecksumV9},
 	}
 	matched := false
 	for _, vc := range versionChecksums {
@@ -557,6 +562,49 @@ func (s *Store) initSchema(ctx context.Context) error {
 			read_at DATETIME,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
+		// v9: Observability tables for metrics and activity logging.
+		`CREATE TABLE IF NOT EXISTS task_metrics (
+			task_id       TEXT PRIMARY KEY,
+			agent_id      TEXT NOT NULL,
+			session_id    TEXT NOT NULL,
+			parent_task_id TEXT,
+			created_at    DATETIME NOT NULL,
+			started_at    DATETIME,
+			completed_at  DATETIME,
+			duration_ms   INTEGER,
+			status        TEXT NOT NULL,
+			prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens      INTEGER NOT NULL DEFAULT 0,
+			estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
+			error_message TEXT,
+			FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS agent_activity_log (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id      TEXT NOT NULL,
+			activity_type TEXT NOT NULL,
+			task_id       TEXT,
+			session_id    TEXT,
+			details       TEXT NOT NULL DEFAULT '{}',
+			created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE TABLE IF NOT EXISTS agent_collaboration_metrics (
+			from_agent    TEXT NOT NULL,
+			to_agent      TEXT NOT NULL,
+			metric_type   TEXT NOT NULL,
+			count         INTEGER NOT NULL DEFAULT 0,
+			total_duration_ms INTEGER NOT NULL DEFAULT 0,
+			last_updated  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(from_agent, to_agent, metric_type)
+		);`,
+		`CREATE TABLE IF NOT EXISTS task_context (
+			task_root_id TEXT NOT NULL,
+			key       TEXT NOT NULL,
+			value     TEXT NOT NULL,
+			UNIQUE(task_root_id, key),
+			FOREIGN KEY (task_root_id) REFERENCES tasks(id) ON DELETE CASCADE
+		);`,
 	}
 
 	for _, stmt := range tableStatements {
@@ -568,6 +616,21 @@ func (s *Store) initSchema(ctx context.Context) error {
 	// Phase 2: Backfills (ALTER TABLE for legacy DBs) — must run before indexes.
 	if err := s.applyBackfillsTx(ctx, tx); err != nil {
 		return err
+	}
+
+	// Phase 2b: V9 migrations - add token tracking and observability columns (idempotent).
+	// These are applied to existing tables, so we catch errors gracefully.
+	v9Statements := []string{
+		// Add token/cost tracking to tasks table (if not already present)
+		"ALTER TABLE tasks ADD COLUMN parent_task_id TEXT",
+		"ALTER TABLE tasks ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE tasks ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE tasks ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE tasks ADD COLUMN estimated_cost_usd REAL NOT NULL DEFAULT 0.0",
+		"ALTER TABLE tasks ADD COLUMN agent_id TEXT",
+	}
+	for _, stmt := range v9Statements {
+		_, _ = tx.ExecContext(ctx, stmt) // Idempotent: ignore "column already exists" errors
 	}
 
 	// Phase 3: Indexes (may reference columns added by backfills).
@@ -586,6 +649,9 @@ func (s *Store) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_tasks_agent_status ON tasks(agent_id, status, available_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_agent, read_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_messages_from ON agent_messages(from_agent);`,
+		// v9: Indexes for observability tables
+		`CREATE INDEX IF NOT EXISTS idx_metrics_agent_time ON task_metrics(agent_id, completed_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_activity_agent_time ON agent_activity_log(agent_id, created_at DESC);`,
 	}
 
 	for _, stmt := range indexStatements {
@@ -1449,6 +1515,8 @@ func (s *Store) CompleteTask(ctx context.Context, taskID, result string) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit complete task tx: %w", err)
 	}
+	// Snapshot metrics on completion (best-effort)
+	_ = s.RecordTaskMetrics(ctx, taskID)
 	return nil
 }
 
@@ -1485,6 +1553,8 @@ func (s *Store) FailTask(ctx context.Context, taskID, errMsg string) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit fail task tx: %w", err)
 	}
+	// Snapshot metrics on completion (best-effort)
+	_ = s.RecordTaskMetrics(ctx, taskID)
 	return nil
 }
 
@@ -3214,4 +3284,52 @@ func (s *Store) ExportIncident(ctx context.Context, taskID, configHash string) (
 		ConfigHash: configHash,
 		ExportedAt: time.Now().UTC(),
 	}, nil
+}
+
+// UpdateTaskTokens records token usage for a task.
+func (s *Store) UpdateTaskTokens(ctx context.Context, taskID string, promptTokens, completionTokens int) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, estimated_cost_usd = 0.0
+		WHERE id = ?`,
+		promptTokens, completionTokens, promptTokens+completionTokens, taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("update task tokens %s: %w", taskID, err)
+	}
+	return nil
+}
+
+// RecordTaskMetrics snapshots final metrics for a completed task.
+func (s *Store) RecordTaskMetrics(ctx context.Context, taskID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO task_metrics (
+			task_id, agent_id, session_id, parent_task_id, created_at, completed_at,
+			status, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd
+		)
+		SELECT
+			id, agent_id, session_id, parent_task_id, created_at, CURRENT_TIMESTAMP,
+			status, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd
+		FROM tasks WHERE id = ?
+		ON CONFLICT(task_id) DO NOTHING`,
+		taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("record task metrics %s: %w", taskID, err)
+	}
+	return nil
+}
+
+// SetParentTask sets the parent task ID for a child task (task trees).
+func (s *Store) SetParentTask(ctx context.Context, childTaskID, parentTaskID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET parent_task_id = ?
+		WHERE id = ?`,
+		parentTaskID, childTaskID,
+	)
+	if err != nil {
+		return fmt.Errorf("set parent task: %w", err)
+	}
+	return nil
 }
