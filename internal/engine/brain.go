@@ -617,6 +617,7 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 	stream := genkit.GenerateStream(ctx, b.g, modelOpts...)
 
 	var fullReply strings.Builder
+	var doneReply string
 	for streamVal, err := range stream {
 		if err != nil {
 			return fmt.Errorf("stream error: %w", err)
@@ -632,25 +633,24 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 			}
 		}
 		if streamVal.Done && streamVal.Response != nil {
-			// Final response - also save to history
-			reply := streamVal.Response.Text()
-			if reply != "" && fullReply.Len() == 0 {
-				if err := b.store.AddHistory(ctx, sessionID, "assistant", reply, tokenutil.EstimateTokens(reply)); err != nil {
-					slog.Warn("failed to save streaming response to history", "error", err)
-				}
-			}
+			doneReply = streamVal.Response.Text()
 		}
 	}
 
-	// Save final response to history if we accumulated chunks
-	if fullReply.Len() > 0 {
+	// Determine final reply: prefer accumulated chunks, fall back to Done response.
+	finalReply := fullReply.String()
+	if finalReply == "" {
+		finalReply = doneReply
+	}
+
+	if finalReply != "" {
 		// Scan for credential leaks in streaming output.
 		if b.leakDetector != nil {
-			if findings := b.leakDetector.Scan(fullReply.String()); len(findings) > 0 {
+			if findings := b.leakDetector.Scan(finalReply); len(findings) > 0 {
 				slog.Warn("leak detector triggered on streaming output", "session_id", sessionID, "findings_count", len(findings))
 			}
 		}
-		if err := b.store.AddHistory(ctx, sessionID, "assistant", fullReply.String(), tokenutil.EstimateTokens(fullReply.String())); err != nil {
+		if err := b.store.AddHistory(ctx, sessionID, "assistant", finalReply, tokenutil.EstimateTokens(finalReply)); err != nil {
 			slog.Warn("failed to save streaming response to history", "error", err)
 		}
 	}

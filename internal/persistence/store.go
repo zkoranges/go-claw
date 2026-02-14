@@ -1661,7 +1661,7 @@ func (s *Store) RecoverRunningTasks(ctx context.Context) (int64, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id
+		SELECT id, session_id, status, updated_at
 		FROM tasks
 		WHERE status IN (?, ?);
 	`, TaskStatusRunning, TaskStatusClaimed)
@@ -1670,24 +1670,30 @@ func (s *Store) RecoverRunningTasks(ctx context.Context) (int64, error) {
 	}
 	defer rows.Close()
 
-	var ids []string
+	type recoverableTask struct {
+		id        string
+		sessionID string
+		status    string
+		updatedAt string
+	}
+	var tasks []recoverableTask
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var t recoverableTask
+		if err := rows.Scan(&t.id, &t.sessionID, &t.status, &t.updatedAt); err != nil {
 			return 0, fmt.Errorf("scan recoverable task: %w", err)
 		}
-		ids = append(ids, id)
+		tasks = append(tasks, t)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("iterate recoverable tasks: %w", err)
 	}
 
 	var recovered int64
-	for _, id := range ids {
+	for _, t := range tasks {
 		ok, err := s.transitionTaskTx(
 			ctx,
 			tx,
-			id,
+			t.id,
 			[]TaskStatus{TaskStatusClaimed, TaskStatusRunning},
 			TaskStatusQueued,
 			"task.recovered",
@@ -1703,8 +1709,19 @@ func (s *Store) RecoverRunningTasks(ctx context.Context) (int64, error) {
 				UPDATE tasks
 				SET lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
 				WHERE id = ? AND status = ?;
-			`, id, TaskStatusQueued); err != nil {
+			`, t.id, TaskStatusQueued); err != nil {
 				return 0, fmt.Errorf("clear lease on recovery requeue: %w", err)
+			}
+			// Clean up orphaned assistant messages from the crashed run.
+			// Tasks in RUNNING state may have saved partial assistant responses
+			// before the crash; remove them to prevent duplicated context on retry.
+			if t.status == string(TaskStatusRunning) {
+				if _, err := tx.ExecContext(ctx, `
+					DELETE FROM messages
+					WHERE session_id = ? AND role = 'assistant' AND created_at >= ?;
+				`, t.sessionID, t.updatedAt); err != nil {
+					return 0, fmt.Errorf("clean orphaned messages: %w", err)
+				}
 			}
 			recovered++
 		}

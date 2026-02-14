@@ -112,8 +112,8 @@ func (t *TelegramChannel) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 		return
 	}
 
-	// Map Telegram user ID to a persistent session ID
-	sessionID := fmt.Sprintf("telegram-%d", msg.From.ID)
+	// Map Telegram user+agent to a persistent session ID (per-agent isolation).
+	sessionID := fmt.Sprintf("telegram-%d-agent-%s", msg.From.ID, agentID)
 
 	// Route through ChatTaskRouter (handles session, history, task creation).
 	taskID, err := t.router.CreateChatTask(ctx, agentID, sessionID, content)

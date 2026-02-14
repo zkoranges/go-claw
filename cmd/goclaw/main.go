@@ -785,7 +785,14 @@ The system runs this checklist periodically to ensure health.
 		Handler: gw.Handler(),
 	}
 	serverErr := make(chan error, 1)
-	ln, err := net.Listen("tcp", cfg.BindAddr)
+	lc := &net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) {
+				_ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+			})
+		},
+	}
+	ln, err := lc.Listen(ctx, "tcp", cfg.BindAddr)
 	if err != nil {
 		if isAddrInUse(err) {
 			hint := portOccupantHint(cfg.BindAddr)

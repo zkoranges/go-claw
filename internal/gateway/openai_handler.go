@@ -29,22 +29,21 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// 1. Determine Session ID
-	// OpenAI API is stateless (history passed in request). GoClaw is stateful.
-	// We use the "user" field (if present) as a deterministic Session ID to allow persistence.
-	// Otherwise, we generate an ephemeral session ID.
-	var sessionID string
-	if req.User != "" {
-		// Deterministic session ID from user field for stateful sessions.
-		sessionID = uuid.NewSHA1(uuid.NameSpaceURL, []byte("goclaw:user:"+req.User)).String()
-	} else {
-		sessionID = uuid.NewString()
-	}
-
-	// 2. Route to agent by model prefix.
+	// 1. Route to agent by model prefix (needed before session ID generation).
 	agentID := "default"
 	if strings.HasPrefix(req.Model, "agent:") {
 		agentID = strings.TrimPrefix(req.Model, "agent:")
+	}
+
+	// 2. Determine Session ID
+	// OpenAI API is stateless (history passed in request). GoClaw is stateful.
+	// We use the "user" field (if present) as a deterministic Session ID to allow persistence.
+	// Include agentID in the namespace so each agent gets its own session.
+	var sessionID string
+	if req.User != "" {
+		sessionID = uuid.NewSHA1(uuid.NameSpaceURL, []byte("goclaw:user:"+req.User+":agent:"+agentID)).String()
+	} else {
+		sessionID = uuid.NewString()
 	}
 
 	// 3. Extract Prompt
