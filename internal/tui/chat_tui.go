@@ -492,18 +492,10 @@ func (m chatModel) View() string {
 		b.WriteString("\n")
 	}
 
-	// GC-SPEC-TUI-002 / TUI-003: Operational status bar with approval count.
-	approvals := 0
-	if m.cc.Approvals != nil {
-		approvals = m.cc.Approvals.PendingApprovalCount()
-	}
-	statusBar := fmt.Sprintf("[Q:%d R:%d Retry:%d DLQ:%d Deny:%d",
+	// GC-SPEC-TUI-002 / TUI-003: Operational status bar.
+	statusBar := fmt.Sprintf("[Q:%d R:%d Retry:%d DLQ:%d Deny:%d]",
 		m.metrics.Pending, m.metrics.Running, m.metrics.RetryWait,
 		m.metrics.DeadLetter, m.denyCount)
-	if approvals > 0 {
-		statusBar += fmt.Sprintf(" Approvals:%d", approvals)
-	}
-	statusBar += "]"
 	b.WriteString(statusBar)
 	b.WriteString("\n")
 
