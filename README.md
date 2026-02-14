@@ -10,7 +10,7 @@
 
 A durable local orchestration kernel for AI agents. Single binary, single user, crash-recoverable.
 
-GoClaw runs a local daemon that accepts agent tasks over a WebSocket protocol (ACP), persists them in SQLite, executes them through an LLM brain with tool access, and guarantees that no work is silently lost — even under `kill -9`.
+GoClaw runs a local daemon that accepts agent tasks over a WebSocket protocol (ACP), persists them in SQLite, and executes them through an LLM brain with tool access — using Go's goroutine-per-worker concurrency model for parallel task execution, heartbeat monitoring, and event fan-in across subsystems. No work is silently lost, even under `kill -9`.
 
 ## Why
 
@@ -31,15 +31,25 @@ Go was chosen for its concurrency primitives and deployment model. The engine us
 - **Operational TUI** (Bubbletea) with interactive chat, agent switching (`/agent`), skill management, and model selection.
 - **Cron scheduler** for recurring tasks with 5-field cron expressions.
 - **Multi-channel input**: Telegram bot integration (with `@agent` routing), OpenAI-compatible `/v1/chat/completions` endpoint.
+- **Context compaction.** When conversation history approaches the model's context window, older messages are summarized via LLM and archived. Recent messages are preserved intact. Falls back to truncation if summarization fails.
 - **Structured observability**: JSON logs, dual-write audit (file + DB), `/healthz` and `/metrics` endpoints.
 
-## What it does not do
+## Use cases
+
+- **Persistent personal assistant.** A local agent that stays running, remembers context across sessions, and can act on scheduled tasks — without depending on a cloud service staying up.
+- **Agent teams.** Define specialized agents (researcher, coder, reviewer) in `config.yaml`, each with its own LLM provider, system prompt, and tool access. Route tasks between them via the ACP gateway or Telegram.
+- **Unattended automation.** Cron-triggered tasks, heartbeat monitoring, and retry-with-backoff mean you can queue work and walk away. Failures dead-letter instead of disappearing.
+- **Skill development sandbox.** Write WASM skills with memory limits and fault quarantine. Hot-reload during development. The sandbox prevents a buggy skill from taking down the daemon.
+- **Self-hosted AI gateway.** Expose the OpenAI-compatible `/v1/chat/completions` endpoint backed by any supported provider. Add policy controls and audit logging that upstream APIs don't offer.
+- **Local MCP host.** Connect MCP servers (stdio or SSE) and expose their tools to agents through a single policy-controlled interface.
+
+## Design constraints
 
 - **No browser automation.** No Chromium, no Puppeteer, no headless rendering.
 - **No distributed clustering.** Single-node, single-process. No multi-node scheduling, no consensus protocol.
 - **No multi-tenancy.** One user context per daemon process. No user isolation within a single instance.
 - **No mobile or desktop clients.** TUI and WebSocket are the interfaces.
-- **No guaranteed exactly-once execution.** Semantics are at-least-once for tasks, at-most-once per idempotency key for side effects. Downstream tools must be idempotent.
+- **At-least-once delivery.** Tasks are durable and lease-protected, but a crash in the narrow window between completing work and writing success will cause a retry. This is the standard trade-off for single-node systems — retry is safer than silent loss. Idempotency keys guard side effects.
 
 ## Status
 
