@@ -101,7 +101,7 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		fmt.Fprintln(out, "    /agents list                 List agents (current marked with *)")
 		fmt.Fprintln(out, "    /agents new <id> [soul]      Create agent with personality")
 		fmt.Fprintln(out, "    /agents remove <id>          Remove an agent")
-		fmt.Fprintln(out, "    /agents team                 Quick-create a team of agents")
+		fmt.Fprintln(out, "    /agents team <role> [roles..] Create a team (e.g. /agents team coder reviewer tester)")
 		fmt.Fprintln(out, "    /skills                      List all skills with live status")
 		fmt.Fprintln(out, "    /skills setup <name>         Auto-configure a skill")
 		fmt.Fprintln(out, "    /allow <domain>              Allow a domain for web access (e.g. /allow reddit.com)")
@@ -436,25 +436,28 @@ func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
 		// List all agents, mark current with *.
 		infos := cc.Switcher.ListAgentInfo()
 		fmt.Fprintln(out)
-		fmt.Fprintln(out, "  Agents:")
+		fmt.Fprintf(out, "  %-2s %-16s %-20s %s\n", "", "ID", "Name", "Model")
+		fmt.Fprintf(out, "  %-2s %-16s %-20s %s\n", "", strings.Repeat("-", 16), strings.Repeat("-", 20), strings.Repeat("-", 20))
 		for _, info := range infos {
-			marker := "  "
+			marker := " "
 			if info.ID == cc.CurrentAgent {
-				marker = "* "
+				marker = "*"
 			}
-			label := info.ID
-			if info.DisplayName != "" && info.DisplayName != info.ID {
-				label = fmt.Sprintf("%s (%s)", info.ID, info.DisplayName)
+			name := info.DisplayName
+			if name == "" || name == info.ID {
+				name = "-"
 			}
 			if info.Emoji != "" {
-				label = fmt.Sprintf("%s %s", info.Emoji, label)
+				name = fmt.Sprintf("%s %s", info.Emoji, name)
 			}
 			model := info.Model
 			if model == "" {
 				model = "default"
 			}
-			fmt.Fprintf(out, "    %s%-30s %s\n", marker, label, model)
+			fmt.Fprintf(out, "  %-2s %-16s %-20s %s\n", marker, info.ID, name, model)
 		}
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  * = current. Use /agents <id> to switch.")
 		fmt.Fprintln(out)
 
 	case "new":
@@ -532,39 +535,7 @@ func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
 		fmt.Fprintln(out)
 
 	case "team":
-		// Quick-create a pre-built team of agents with distinct personalities.
-		teamAgents := []struct {
-			id   string
-			soul string
-		}{
-			{"researcher", "You are a research specialist. Your job is to find information, analyze data, and provide thorough research summaries. Be methodical and cite your sources."},
-			{"writer", "You are a writing specialist. Your job is to draft, edit, and polish text. You excel at clear communication, storytelling, and adapting tone for different audiences."},
-			{"critic", "You are a critical analyst. Your job is to review ideas and work products, identify weaknesses, suggest improvements, and play devil's advocate constructively."},
-		}
-
-		provider := ""
-		model := ""
-		if cc.Cfg != nil {
-			provider = cc.Cfg.LLMProvider
-			model = cc.Cfg.GeminiModel
-		}
-
-		created := 0
-		for _, ta := range teamAgents {
-			if err := cc.Switcher.CreateAgent(context.Background(), ta.id, ta.id, provider, model, ta.soul); err != nil {
-				fmt.Fprintf(out, "  Skipped %s: %v\n", ta.id, err)
-				continue
-			}
-			created++
-			fmt.Fprintf(out, "  Created: %s\n", ta.id)
-		}
-		if created > 0 {
-			fmt.Fprintf(out, "\n  Team created with %d agents. Use /agents to switch between them.\n", created)
-			fmt.Fprintln(out, "  Agents can collaborate using delegate_task and send_message tools.")
-		} else {
-			fmt.Fprintln(out, "  No new agents created (team may already exist).")
-		}
-		fmt.Fprintln(out)
+		handleTeamCommand(subArg, cc, out)
 
 	default:
 		// Treat as agent ID to switch to (backward compat with /agent <id>).
@@ -579,6 +550,84 @@ func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
 		cc.CurrentAgent = arg
 		fmt.Fprintf(out, "  Switched to agent: %s\n\n", arg)
 	}
+}
+
+// knownRoleSouls maps well-known role names to specialized soul descriptions.
+var knownRoleSouls = map[string]string{
+	"researcher": "You are a research specialist. Find information, analyze data, and provide thorough research summaries. Be methodical and cite your sources.",
+	"writer":     "You are a writing specialist. Draft, edit, and polish text. Excel at clear communication, storytelling, and adapting tone for different audiences.",
+	"critic":     "You are a critical analyst. Review ideas and work products, identify weaknesses, suggest improvements, and play devil's advocate constructively.",
+	"coder":      "You are a coding specialist. Write clean, efficient code. Debug issues, suggest optimizations, and follow best practices for the relevant language.",
+	"reviewer":   "You are a code reviewer. Examine code for bugs, security issues, performance problems, and style. Provide specific, actionable feedback.",
+	"tester":     "You are a testing specialist. Design test cases, identify edge cases, write test plans, and verify that implementations meet requirements.",
+	"planner":    "You are a project planner. Break down tasks, estimate effort, identify dependencies, and create actionable plans with clear milestones.",
+	"editor":     "You are an editor. Improve clarity, grammar, structure, and flow. Ensure writing is concise, accurate, and appropriate for its audience.",
+	"analyst":    "You are a data analyst. Examine data, identify patterns, draw conclusions, and present findings clearly with supporting evidence.",
+	"designer":   "You are a design specialist. Focus on user experience, interface design, information architecture, and visual clarity.",
+}
+
+// soulForRole returns a soul description for a given role name.
+func soulForRole(role string) string {
+	if soul, ok := knownRoleSouls[strings.ToLower(role)]; ok {
+		return soul
+	}
+	return fmt.Sprintf("You are a %s specialist. Focus on %s-related tasks and provide expert guidance in your area.", role, role)
+}
+
+// handleTeamCommand processes /agents team sub-commands.
+func handleTeamCommand(arg string, cc *ChatConfig, out io.Writer) {
+	if strings.TrimSpace(arg) == "" {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  Usage: /agents team <role1> [role2] [role3...]")
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  Examples:")
+		fmt.Fprintln(out, "    /agents team coder reviewer tester")
+		fmt.Fprintln(out, "    /agents team researcher writer editor")
+		fmt.Fprintln(out, "    /agents team analyst planner")
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  Known roles (auto-generate specialized personality):")
+		sorted := []string{"researcher", "writer", "critic", "coder", "reviewer", "tester", "planner", "editor", "analyst", "designer"}
+		for _, r := range sorted {
+			fmt.Fprintf(out, "    %-12s %s\n", r, knownRoleSouls[r][:60]+"...")
+		}
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  Custom roles also work — a default personality is generated.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	roles := strings.Fields(arg)
+	if len(roles) == 0 {
+		fmt.Fprintln(out, "  No roles specified. Usage: /agents team <role1> [role2...]")
+		fmt.Fprintln(out)
+		return
+	}
+
+	provider := ""
+	model := ""
+	if cc.Cfg != nil {
+		provider = cc.Cfg.LLMProvider
+		model = cc.Cfg.GeminiModel
+	}
+
+	created := 0
+	for _, role := range roles {
+		id := strings.ToLower(role)
+		soul := soulForRole(id)
+		if err := cc.Switcher.CreateAgent(context.Background(), id, id, provider, model, soul); err != nil {
+			fmt.Fprintf(out, "  Skipped %s: %v\n", id, err)
+			continue
+		}
+		created++
+		fmt.Fprintf(out, "  Created: %s\n", id)
+	}
+	if created > 0 {
+		fmt.Fprintf(out, "\n  Team created with %d agent(s). Use /agents to switch between them.\n", created)
+		fmt.Fprintln(out, "  Agents can collaborate using delegate_task and send_message tools.")
+	} else {
+		fmt.Fprintln(out, "  No new agents created (team may already exist).")
+	}
+	fmt.Fprintln(out)
 }
 
 // handleModelCommand processes /model sub-commands.

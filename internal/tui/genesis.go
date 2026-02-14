@@ -740,6 +740,8 @@ func sanitizeAPIKey(raw string) string {
 
 // RunGenesis runs the genesis wizard TUI and returns the generated files.
 func RunGenesis(ctx context.Context) (*GenesisResult, error) {
+	defer bestEffortResetTTY()
+
 	m := newGenesisModel()
 	m.input = m.agentName // Pre-fill name input
 	m.inputPos = runeLen(m.agentName)

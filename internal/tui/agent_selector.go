@@ -62,23 +62,25 @@ func (m agentSelectorModel) View() string {
 
 	var b strings.Builder
 	b.WriteString("\n  Select an agent:\n\n")
+	b.WriteString(fmt.Sprintf("  %-2s %-2s %-16s %-20s %s\n", "", "", "ID", "Name", "Model"))
+	b.WriteString(fmt.Sprintf("  %-2s %-2s %-16s %-20s %s\n", "", "", strings.Repeat("-", 16), strings.Repeat("-", 20), strings.Repeat("-", 20)))
 
 	for i, info := range m.agents {
-		cursor := "  "
+		cursor := " "
 		if i == m.cursor {
-			cursor = "> "
+			cursor = ">"
 		}
 		marker := " "
 		if info.ID == m.current {
 			marker = "*"
 		}
 
-		label := info.ID
-		if info.DisplayName != "" && info.DisplayName != info.ID {
-			label = fmt.Sprintf("%s (%s)", info.ID, info.DisplayName)
+		name := info.DisplayName
+		if name == "" || name == info.ID {
+			name = "-"
 		}
 		if info.Emoji != "" {
-			label = fmt.Sprintf("%s %s", info.Emoji, label)
+			name = fmt.Sprintf("%s %s", info.Emoji, name)
 		}
 
 		model := info.Model
@@ -86,7 +88,7 @@ func (m agentSelectorModel) View() string {
 			model = "default"
 		}
 
-		b.WriteString(fmt.Sprintf("  %s%s %-30s %s\n", cursor, marker, label, model))
+		b.WriteString(fmt.Sprintf("  %-2s %-2s %-16s %-20s %s\n", cursor, marker, info.ID, name, model))
 	}
 
 	b.WriteString("\n  [Up/Down] Navigate  [Enter] Select  [Esc] Cancel\n")
