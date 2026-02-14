@@ -12,6 +12,12 @@ A durable local orchestration kernel for AI agents. Single binary, single user, 
 
 GoClaw runs a local daemon that accepts agent tasks over a WebSocket protocol (ACP), persists them in SQLite, executes them through an LLM brain with tool access, and guarantees that no work is silently lost — even under `kill -9`.
 
+## Why
+
+Agent orchestration requires durable task queues, crash recovery, lease-based ownership, policy enforcement, and sandboxed skill execution. GoClaw implements these as a single-process daemon backed by SQLite WAL, so no external services (Redis, Postgres, message brokers) are needed.
+
+Go was chosen for its concurrency primitives and deployment model. The engine uses goroutine-per-worker pools, per-task heartbeat goroutines, and channel-based event fan-in across subsystems (config watcher, skill watcher, WASM hot-reload, event bus). Context propagation handles cancellation and timeouts throughout. The result is a single statically-linked binary with no runtime dependencies beyond SQLite.
+
 ## What it does
 
 - **Durable task queue** backed by SQLite WAL. Tasks survive crashes and restarts. Lease-based ownership with automatic recovery of orphaned work.
@@ -43,7 +49,16 @@ The core subsystems (persistence, engine, gateway, policy, WASM sandbox, multi-a
 
 ## Build and run
 
-Requires Go 1.24+ and a `GEMINI_API_KEY` in `.env` or environment.
+Requires Go 1.24+ and an LLM API key. Set one of the following in `.env` or environment:
+
+| Provider | Env var | Notes |
+|---|---|---|
+| Google Gemini | `GEMINI_API_KEY` | Default provider |
+| Anthropic | `ANTHROPIC_API_KEY` | Claude models |
+| OpenAI | `OPENAI_API_KEY` | GPT models |
+| OpenRouter | `OPENROUTER_API_KEY` | Multi-model gateway |
+
+Configure the active provider in `config.yaml` under `llm.provider`, or use `/model` in the TUI to switch interactively.
 
 ```bash
 just build          # compile to /tmp/goclaw
