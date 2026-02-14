@@ -47,6 +47,24 @@ Go was chosen for its concurrency primitives and deployment model. The engine us
 
 The core subsystems (persistence, engine, gateway, policy, WASM sandbox, multi-agent) are implemented and tested. The project is undergoing refactoring and is not yet stable. Spec: [SPEC.md](SPEC.md).
 
+## Install
+
+**Quick install** (requires Go 1.24+ and git):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zkoranges/go-claw/main/install.sh | bash
+```
+
+Or clone and run locally:
+
+```bash
+git clone https://github.com/zkoranges/go-claw.git
+cd go-claw
+./install.sh
+```
+
+The script checks prerequisites, builds from source, installs the binary to `/usr/local/bin` (configurable via `INSTALL_DIR`), and creates `~/.goclaw`.
+
 ## Build and run
 
 Requires Go 1.24+ and an LLM API key. Set one of the following in `.env` or environment:
