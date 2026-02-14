@@ -15,12 +15,14 @@ import (
 
 	"github.com/basket/go-claw/internal/agent"
 	"github.com/basket/go-claw/internal/audit"
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/engine"
 	"github.com/basket/go-claw/internal/gateway"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/google/uuid"
 )
 
 func makeTestRegistry(store *persistence.Store, eng *engine.Engine) *agent.Registry {
@@ -1509,6 +1511,694 @@ func TestPrometheusMetricsEndpoint(t *testing.T) {
 	}
 }
 
+func TestHealthzEndpoint_IncludesAgentCount(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode healthz: %v", err)
+	}
+
+	agentCount, ok := body["agent_count"]
+	if !ok {
+		t.Fatalf("healthz missing agent_count field, got: %v", body)
+	}
+	// We registered one "default" test agent.
+	if count, ok := agentCount.(float64); !ok || count < 1 {
+		t.Fatalf("expected agent_count >= 1, got %v", agentCount)
+	}
+}
+
+func TestMetricsEndpoint_IncludesAgentAndDelegationFields(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode metrics: %v", err)
+	}
+
+	// Verify agent-related fields.
+	for _, field := range []string{"agent_count", "agent_messages_total", "delegations_total", "agents"} {
+		if _, ok := body[field]; !ok {
+			t.Errorf("metrics missing %q field, got: %v", field, body)
+		}
+	}
+
+	// agents should be an array.
+	agents, ok := body["agents"].([]interface{})
+	if !ok {
+		t.Fatalf("agents is not an array: %T", body["agents"])
+	}
+	if len(agents) < 1 {
+		t.Fatalf("expected at least 1 agent in metrics, got %d", len(agents))
+	}
+
+	// Each agent entry should have agent_id, active_tasks, worker_count.
+	agentEntry, ok := agents[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("agent entry is not a map")
+	}
+	for _, key := range []string{"agent_id", "active_tasks", "worker_count"} {
+		if _, ok := agentEntry[key]; !ok {
+			t.Errorf("agent entry missing %q, got: %v", key, agentEntry)
+		}
+	}
+}
+
+func TestPrometheusMetrics_PerAgentLabelsAndDelegations(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/metrics/prometheus", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /metrics/prometheus: %v", err)
+	}
+	defer resp.Body.Close()
+
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	body := string(rawBody)
+
+	// Per-agent labels should be present.
+	if !strings.Contains(body, "goclaw_agent_active_tasks{") {
+		t.Error("prometheus output missing per-agent goclaw_agent_active_tasks metric with labels")
+	}
+
+	// Delegation counter should be present.
+	if !strings.Contains(body, "goclaw_delegations_total") {
+		t.Error("prometheus output missing goclaw_delegations_total metric")
+	}
+
+	// Agent count metric should still be present.
+	if !strings.Contains(body, "goclaw_agent_count") {
+		t.Error("prometheus output missing goclaw_agent_count")
+	}
+}
+
+func TestAgentListViaRPC(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, engine.EchoProcessor{}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  2 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	conn := connectWS(t, ts.URL, gatewayTestAuthToken)
+	sendHello(t, conn)
+	ctx := context.Background()
+
+	req := rpcReq{JSONRPC: "2.0", ID: 1, Method: "agent.list"}
+	if err := wsjson.Write(ctx, conn, req); err != nil {
+		t.Fatalf("write agent.list: %v", err)
+	}
+	var resp rpcResp
+	if err := wsjson.Read(ctx, conn, &resp); err != nil {
+		t.Fatalf("read agent.list: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("agent.list error: %+v", resp.Error)
+	}
+
+	var result struct {
+		Agents []struct {
+			AgentID     string `json:"agent_id"`
+			WorkerCount int    `json:"worker_count"`
+			Status      string `json:"status"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal agent.list: %v", err)
+	}
+	if len(result.Agents) < 1 {
+		t.Fatalf("expected at least 1 agent, got %d", len(result.Agents))
+	}
+	found := false
+	for _, a := range result.Agents {
+		if a.AgentID == "default" {
+			found = true
+			if a.Status != "active" {
+				t.Errorf("expected default agent status=active, got %q", a.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("default agent not found in agent.list result")
+	}
+}
+
+func TestAgentStatusViaRPC(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, engine.EchoProcessor{}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  2 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	conn := connectWS(t, ts.URL, gatewayTestAuthToken)
+	sendHello(t, conn)
+	ctx := context.Background()
+
+	req := rpcReq{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "agent.status",
+		Params:  map[string]any{"agent_id": "default"},
+	}
+	if err := wsjson.Write(ctx, conn, req); err != nil {
+		t.Fatalf("write agent.status: %v", err)
+	}
+	var resp rpcResp
+	if err := wsjson.Read(ctx, conn, &resp); err != nil {
+		t.Fatalf("read agent.status: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("agent.status error: %+v", resp.Error)
+	}
+
+	var result struct {
+		AgentID     string `json:"agent_id"`
+		WorkerCount int    `json:"worker_count"`
+		ActiveTasks int32  `json:"active_tasks"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal agent.status: %v", err)
+	}
+	if result.AgentID != "default" {
+		t.Fatalf("expected agent_id=default, got %q", result.AgentID)
+	}
+	if result.WorkerCount < 1 {
+		t.Errorf("expected worker_count >= 1, got %d", result.WorkerCount)
+	}
+}
+
+// --- Sprint 0 Bug Fix Tests ---
+
+// mockStreamBrain implements engine.Brain for streaming tests.
+type mockStreamBrain struct {
+	chunks []string
+}
+
+func (m *mockStreamBrain) Respond(ctx context.Context, sessionID, content string) (string, error) {
+	return strings.Join(m.chunks, ""), nil
+}
+
+func (m *mockStreamBrain) Stream(ctx context.Context, sessionID, content string, onChunk func(content string) error) error {
+	for _, chunk := range m.chunks {
+		if err := onChunk(chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TestBug1_OpenAIStreamingDeliversChunksBeforeDone verifies that the SSE stream
+// contains content chunks before the [DONE] sentinel (was broken when streamChatTask
+// ran asynchronously via goroutine).
+func TestBug1_OpenAIStreamingDeliversChunksBeforeDone(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	brain := &mockStreamBrain{chunks: []string{"Hello", " world", "!"}}
+	eng := engine.New(store, engine.EchoProcessor{Brain: brain}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  5 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	body := `{"model":"goclaw-v1","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/chat/completions: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(b))
+	}
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+
+	var dataChunks []string
+	sawDone := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line == "data: [DONE]" {
+			sawDone = true
+			continue
+		}
+		if strings.HasPrefix(line, "data: ") {
+			if sawDone {
+				t.Fatalf("received data chunk after [DONE]")
+			}
+			dataChunks = append(dataChunks, line)
+		}
+	}
+	if !sawDone {
+		t.Fatalf("never saw [DONE] in response")
+	}
+	if len(dataChunks) == 0 {
+		t.Fatalf("no content chunks received before [DONE]")
+	}
+	if len(dataChunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(dataChunks))
+	}
+}
+
+// TestBug2_LiveEventPushViaBus verifies that events generated after a
+// session.events.subscribe are pushed live to the WS client via the bus,
+// not just replayed from the DB.
+func TestBug2_LiveEventPushViaBus(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	ctx := context.Background()
+	sessionID := "d06bc58c-8928-4aa5-beac-44f1ebc787f5"
+	if err := store.EnsureSession(ctx, sessionID); err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	b := bus.New()
+	eng := engine.New(store, successfulGatewayProcessor{}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  2 * time.Second,
+	}, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+		Bus:       b,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	conn := connectWS(t, ts.URL, gatewayTestAuthToken)
+	sendHello(t, conn)
+
+	// Subscribe with from_event_id=0 (no replay expected since no events exist yet).
+	subReq := rpcReq{
+		JSONRPC: "2.0",
+		ID:      99,
+		Method:  "session.events.subscribe",
+		Params: map[string]any{
+			"session_id":    sessionID,
+			"from_event_id": 0,
+		},
+	}
+	if err := wsjson.Write(ctx, conn, subReq); err != nil {
+		t.Fatalf("write subscribe: %v", err)
+	}
+
+	// Read the subscribe response first.
+	var subResp rpcResp
+	if err := wsjson.Read(ctx, conn, &subResp); err != nil {
+		t.Fatalf("read subscribe response: %v", err)
+	}
+	if subResp.Error != nil {
+		t.Fatalf("subscribe error: %+v", subResp.Error)
+	}
+
+	// Now create a task (which generates task_events in the DB).
+	taskID, err := store.CreateTask(ctx, sessionID, `{"content":"live-test"}`)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	task, err := store.ClaimNextPendingTask(ctx)
+	if err != nil || task == nil {
+		t.Fatalf("claim task: %v", err)
+	}
+	if err := store.StartTaskRun(ctx, taskID, task.LeaseOwner, ""); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if err := store.CompleteTask(ctx, taskID, `{"reply":"ok"}`); err != nil {
+		t.Fatalf("complete task: %v", err)
+	}
+
+	// Publish a bus event to trigger the live push.
+	b.Publish("task.succeeded", map[string]string{
+		"task_id":    taskID,
+		"session_id": sessionID,
+	})
+
+	// Read live events — we should see at least one pushed event.
+	var liveEvents int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		readCtx, readCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		var msg rpcResp
+		err := wsjson.Read(readCtx, conn, &msg)
+		readCancel()
+		if err != nil {
+			break // timeout = no more events
+		}
+		if msg.Method == "session.event" {
+			liveEvents++
+		}
+	}
+
+	if liveEvents == 0 {
+		t.Fatalf("expected live events pushed via bus, got none")
+	}
+}
+
+// TestBug3_MultiTurnContextPreserved verifies that prior messages in the
+// OpenAI request are seeded into the session history so the Brain can see
+// the full conversation context.
+func TestBug3_MultiTurnContextPreserved(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	// This brain records the content it receives so we can verify it was invoked.
+	brain := &mockStreamBrain{chunks: []string{"I remember your name"}}
+	eng := engine.New(store, engine.EchoProcessor{Brain: brain}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  5 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// Send a multi-turn conversation with a deterministic user to get a stable session.
+	body := `{
+		"model": "goclaw-v1",
+		"user": "multi-turn-test-user",
+		"stream": true,
+		"messages": [
+			{"role": "system", "content": "You are a helpful assistant."},
+			{"role": "user", "content": "My name is Alice."},
+			{"role": "assistant", "content": "Hello Alice!"},
+			{"role": "user", "content": "What is my name?"}
+		]
+	}`
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /v1/chat/completions: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, string(b))
+	}
+
+	// Verify prior messages were seeded into the session.
+	// Compute the session ID the same way the handler does.
+	sessionID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("goclaw:user:multi-turn-test-user:agent:default")).String()
+	history, err := store.ListHistory(context.Background(), sessionID, "", 100)
+	if err != nil {
+		t.Fatalf("list history: %v", err)
+	}
+
+	// We expect: system, user, assistant (seeded) + user (from StreamChatTask) = 4 minimum.
+	if len(history) < 4 {
+		t.Fatalf("expected at least 4 history entries (3 seeded + 1 from engine), got %d", len(history))
+	}
+
+	// Verify the seeded messages are present in order.
+	roleContent := make(map[string]bool)
+	for _, h := range history {
+		roleContent[h.Role+":"+h.Content] = true
+	}
+	expected := []string{
+		"system:You are a helpful assistant.",
+		"user:My name is Alice.",
+		"assistant:Hello Alice!",
+	}
+	for _, exp := range expected {
+		if !roleContent[exp] {
+			t.Errorf("expected seeded message %q in history, not found", exp)
+		}
+	}
+}
+
+// GC-SPEC-OBS-006: incident.export returns a bounded run bundle.
+func TestGateway_IncidentExportReturnsBundleForTask(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, successfulGatewayProcessor{}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  2 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	configFP := "test-cfg-fp-incident"
+	srv := gateway.New(gateway.Config{
+		Store:             store,
+		Registry:          makeTestRegistry(store, eng),
+		Policy:            gatewayTestPolicy,
+		AuthToken:         gatewayTestAuthToken,
+		ConfigFingerprint: configFP,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	conn := connectWS(t, ts.URL, gatewayTestAuthToken)
+	sendHello(t, conn)
+	ctx := context.Background()
+
+	// Create a task via agent.chat and wait for it to succeed.
+	sessionID := uuid.NewString()
+	chatReq := rpcReq{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "agent.chat",
+		Params: map[string]any{
+			"session_id": sessionID,
+			"content":    "incident-test",
+		},
+	}
+	if err := wsjson.Write(ctx, conn, chatReq); err != nil {
+		t.Fatalf("write chat: %v", err)
+	}
+	var chatResp rpcResp
+	if err := wsjson.Read(ctx, conn, &chatResp); err != nil {
+		t.Fatalf("read chat: %v", err)
+	}
+	if chatResp.Error != nil {
+		t.Fatalf("agent.chat error: %+v", chatResp.Error)
+	}
+	var chatResult struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(chatResp.Result, &chatResult); err != nil {
+		t.Fatalf("unmarshal chat result: %v", err)
+	}
+	waitForTaskDone(t, store, chatResult.TaskID)
+
+	// Call incident.export for the completed task.
+	exportReq := rpcReq{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "incident.export",
+		Params:  map[string]any{"task_id": chatResult.TaskID},
+	}
+	if err := wsjson.Write(ctx, conn, exportReq); err != nil {
+		t.Fatalf("write incident.export: %v", err)
+	}
+	var exportResp rpcResp
+	if err := wsjson.Read(ctx, conn, &exportResp); err != nil {
+		t.Fatalf("read incident.export: %v", err)
+	}
+	if exportResp.Error != nil {
+		t.Fatalf("incident.export error: %+v", exportResp.Error)
+	}
+
+	var bundle struct {
+		TaskID     string `json:"task_id"`
+		ConfigHash string `json:"config_hash"`
+		ExportedAt string `json:"exported_at"`
+		Task       struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"task"`
+		Events []struct {
+			EventID   int64  `json:"event_id"`
+			TaskID    string `json:"task_id"`
+			EventType string `json:"event_type"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(exportResp.Result, &bundle); err != nil {
+		t.Fatalf("unmarshal incident bundle: %v", err)
+	}
+	if bundle.TaskID != chatResult.TaskID {
+		t.Fatalf("expected task_id=%s, got %s", chatResult.TaskID, bundle.TaskID)
+	}
+	if bundle.ConfigHash != configFP {
+		t.Fatalf("expected config_hash=%s, got %s", configFP, bundle.ConfigHash)
+	}
+	if bundle.ExportedAt == "" {
+		t.Fatal("expected exported_at to be set")
+	}
+	if bundle.Task.ID != chatResult.TaskID {
+		t.Fatalf("expected task.id=%s, got %s", chatResult.TaskID, bundle.Task.ID)
+	}
+	if len(bundle.Events) == 0 {
+		t.Fatal("expected at least one event in the incident bundle")
+	}
+}
+
+// GC-SPEC-OBS-006: incident.export requires task_id parameter.
+func TestGateway_IncidentExportRejectsMissingTaskID(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, engine.EchoProcessor{}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  2 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	conn := connectWS(t, ts.URL, gatewayTestAuthToken)
+	sendHello(t, conn)
+	ctx := context.Background()
+
+	req := rpcReq{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "incident.export",
+		Params:  map[string]any{},
+	}
+	if err := wsjson.Write(ctx, conn, req); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var resp rpcResp
+	if err := wsjson.Read(ctx, conn, &resp); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error for missing task_id")
+	}
+	if resp.Error.Code != gateway.ErrCodeInvalid {
+		t.Fatalf("expected invalid code %d, got %d", gateway.ErrCodeInvalid, resp.Error.Code)
+	}
+}
+
 func TestPrometheusMetricsEndpoint_RejectsMissingAuth(t *testing.T) {
 	store := openStoreForGatewayTest(t)
 	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
@@ -1528,5 +2218,98 @@ func TestPrometheusMetricsEndpoint_RejectsMissingAuth(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// GC-SPEC-TUI-001: config.list ACP method.
+func TestGateway_ConfigListReturnsAPIKeys(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, engine.EchoProcessor{}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  2 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	conn := connectWS(t, ts.URL, gatewayTestAuthToken)
+	sendHello(t, conn)
+	ctx := context.Background()
+
+	req := rpcReq{JSONRPC: "2.0", ID: 1, Method: "config.list"}
+	if err := wsjson.Write(ctx, conn, req); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var resp rpcResp
+	if err := wsjson.Read(ctx, conn, &resp); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("config.list error: %+v", resp.Error)
+	}
+	var result struct {
+		APIKeys map[string]string `json:"api_keys"`
+	}
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result.APIKeys == nil {
+		t.Fatal("expected api_keys map in result")
+	}
+}
+
+// GC-SPEC-TUI-001: policy.domain.add ACP method rejects missing domain.
+func TestGateway_PolicyDomainAddRejectsMissingDomain(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, engine.EchoProcessor{}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  2 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	conn := connectWS(t, ts.URL, gatewayTestAuthToken)
+	sendHello(t, conn)
+	ctx := context.Background()
+
+	req := rpcReq{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "policy.domain.add",
+		Params:  map[string]any{},
+	}
+	if err := wsjson.Write(ctx, conn, req); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var resp rpcResp
+	if err := wsjson.Read(ctx, conn, &resp); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error for missing domain")
+	}
+	if resp.Error.Code != gateway.ErrCodeInvalid {
+		t.Fatalf("expected invalid code %d, got %d", gateway.ErrCodeInvalid, resp.Error.Code)
 	}
 }

@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/basket/go-claw/internal/audit"
 	"github.com/basket/go-claw/internal/config"
+	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/shared"
 	"github.com/basket/go-claw/internal/tokenutil"
 )
@@ -36,6 +39,9 @@ type brainReplyMsg struct {
 type ctxDoneMsg struct{}
 
 type spinnerTickMsg struct{}
+
+// statusTickMsg triggers a periodic refresh of operational metrics (GC-SPEC-TUI-002).
+type statusTickMsg struct{}
 
 type chatMode int
 
@@ -71,6 +77,10 @@ type chatModel struct {
 	inputHistory []string
 	histIdx      int    // 0..len(inputHistory); len = editing new line
 	histSaved    string // current draft before entering history
+
+	// GC-SPEC-TUI-002: Operational status bar.
+	metrics    persistence.MetricsCounts
+	denyCount  int64
 }
 
 func newChatModel(ctx context.Context, cc ChatConfig, sessionID, agentPrefix, modelName string) chatModel {
@@ -111,7 +121,11 @@ func runChatTUI(ctx context.Context, m chatModel, cancel context.CancelFunc) err
 }
 
 func (m chatModel) Init() tea.Cmd {
-	return waitCtxDone(m.ctx)
+	return tea.Batch(waitCtxDone(m.ctx), statusTickCmd())
+}
+
+func statusTickCmd() tea.Cmd {
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return statusTickMsg{} })
 }
 
 func waitCtxDone(ctx context.Context) tea.Cmd {
@@ -125,6 +139,16 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ctxDoneMsg:
 		return m, tea.Quit
+
+	case statusTickMsg:
+		// GC-SPEC-TUI-002: Refresh operational metrics for the status bar.
+		if m.cc.Store != nil {
+			if mc, err := m.cc.Store.MetricsCounts(m.ctx); err == nil {
+				m.metrics = mc
+			}
+		}
+		m.denyCount = audit.DenyCount()
+		return m, statusTickCmd()
 
 	case tea.KeyMsg:
 		if m.mode == chatModeModelSelector {
@@ -270,7 +294,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// User message.
 			m.history = append(m.history, chatEntry{role: chatRoleUser, text: line})
 			if m.cc.Store != nil {
-				_ = m.cc.Store.AddHistory(m.ctx, m.sessionID, "user", line, tokenutil.EstimateTokens(line))
+				_ = m.cc.Store.AddHistory(m.ctx, m.sessionID, m.cc.CurrentAgent, "user", line, tokenutil.EstimateTokens(line))
 			}
 			m.thinking = true
 			return m, tea.Batch(respondCmd(m.ctx, m.cc, m.sessionID, line), waitForSpinner())
@@ -382,7 +406,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.history = append(m.history, chatEntry{role: chatRoleAssistant, text: msg.reply})
 		if m.cc.Store != nil {
-			_ = m.cc.Store.AddHistory(m.ctx, m.sessionID, "assistant", msg.reply, tokenutil.EstimateTokens(msg.reply))
+			_ = m.cc.Store.AddHistory(m.ctx, m.sessionID, m.cc.CurrentAgent, "assistant", msg.reply, tokenutil.EstimateTokens(msg.reply))
 		}
 		return m, nil
 
@@ -407,9 +431,19 @@ func respondCmd(ctx context.Context, cc ChatConfig, sessionID, prompt string) te
 		if cc.Brain == nil {
 			return brainReplyMsg{err: fmt.Errorf("brain not configured")}
 		}
-		// Inject agent ID into context so tools know which agent is calling.
+		// GC-SPEC-RUN-004: Inject agent ID, trace ID, and run ID into context.
+		traceID := shared.NewTraceID()
+		runID := shared.NewRunID()
 		agentCtx := shared.WithAgentID(ctx, cc.CurrentAgent)
+		agentCtx = shared.WithTraceID(agentCtx, traceID)
+		agentCtx = shared.WithRunID(agentCtx, runID)
+		slog.Debug("tui: chat request", "agent_id", cc.CurrentAgent, "session_id", sessionID, "trace_id", traceID, "run_id", runID)
 		reply, err := cc.Brain.Respond(agentCtx, sessionID, prompt)
+		if err != nil {
+			slog.Warn("tui: chat response error", "agent_id", cc.CurrentAgent, "session_id", sessionID, "trace_id", traceID, "run_id", runID, "error", err)
+		} else {
+			slog.Debug("tui: chat response ok", "agent_id", cc.CurrentAgent, "session_id", sessionID, "trace_id", traceID, "run_id", runID)
+		}
 		return brainReplyMsg{reply: reply, err: err}
 	}
 }
@@ -434,7 +468,7 @@ func (m chatModel) View() string {
 
 	// Render history, clipped to window height (best-effort; no expensive wrapping).
 	hLines := m.renderHistoryLines()
-	available := m.height - 5 // header + instructions + blank + input + status
+	available := m.height - 6 // header + instructions + blank + input + spinner + status bar
 	if available < 3 {
 		available = 3
 	}
@@ -457,6 +491,21 @@ func (m chatModel) View() string {
 	} else {
 		b.WriteString("\n")
 	}
+
+	// GC-SPEC-TUI-002 / TUI-003: Operational status bar with approval count.
+	approvals := 0
+	if m.cc.Approvals != nil {
+		approvals = m.cc.Approvals.PendingApprovalCount()
+	}
+	statusBar := fmt.Sprintf("[Q:%d R:%d Retry:%d DLQ:%d Deny:%d",
+		m.metrics.Pending, m.metrics.Running, m.metrics.RetryWait,
+		m.metrics.DeadLetter, m.denyCount)
+	if approvals > 0 {
+		statusBar += fmt.Sprintf(" Approvals:%d", approvals)
+	}
+	statusBar += "]"
+	b.WriteString(statusBar)
+	b.WriteString("\n")
 
 	return b.String()
 }

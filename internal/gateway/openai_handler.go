@@ -58,7 +58,22 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 	}
 	prompt := lastMsg.Content
 
-	// 4. Create Task
+	// 4. Seed prior messages into session history so the Brain sees full context.
+	// The OpenAI API is stateless (client sends full history each request), but
+	// GoClaw's Brain loads history from the DB. We reconcile by ensuring all
+	// prior messages exist in the session before dispatching the new prompt.
+	if err := s.cfg.Store.EnsureSession(r.Context(), sessionID); err != nil {
+		s.openAIError(w, http.StatusInternalServerError, "internal_error", "session init: "+err.Error())
+		return
+	}
+	for _, msg := range req.Messages[:len(req.Messages)-1] {
+		role := strings.ToLower(msg.Role)
+		if role == "system" || role == "user" || role == "assistant" || role == "tool" {
+			_ = s.cfg.Store.AddHistory(r.Context(), sessionID, agentID, role, msg.Content, tokenutil.EstimateTokens(msg.Content))
+		}
+	}
+
+	// 5. Create Task
 	traceID := shared.NewTraceID()
 	ctx := shared.WithTraceID(r.Context(), traceID)
 

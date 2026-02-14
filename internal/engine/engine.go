@@ -17,6 +17,7 @@ import (
 	"github.com/basket/go-claw/internal/tokenutil"
 )
 
+// Config controls the engine's worker pool size, polling behavior, and agent scoping.
 type Config struct {
 	WorkerCount   int
 	PollInterval  time.Duration
@@ -26,6 +27,7 @@ type Config struct {
 	AgentID       string // if set, workers only claim tasks for this agent
 }
 
+// Processor transforms a claimed task into a result string or error.
 type Processor interface {
 	Process(ctx context.Context, task persistence.Task) (string, error)
 }
@@ -37,6 +39,8 @@ type ChatTaskRouter interface {
 	CreateChatTask(ctx context.Context, agentID, sessionID, content string) (string, error)
 }
 
+// EchoProcessor decodes chatTaskPayload JSON from the task, forwards it to a Brain,
+// and wraps the reply in chatResultPayload JSON.
 type EchoProcessor struct {
 	Brain Brain
 }
@@ -59,7 +63,7 @@ func (p EchoProcessor) Process(ctx context.Context, task persistence.Task) (stri
 	}
 	reply, err := p.Brain.Respond(ctx, task.SessionID, payload.Content)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("brain respond: %w", err)
 	}
 	out, err := json.Marshal(chatResultPayload{Reply: reply})
 	if err != nil {
@@ -68,6 +72,7 @@ func (p EchoProcessor) Process(ctx context.Context, task persistence.Task) (stri
 	return string(out), nil
 }
 
+// Status is a point-in-time snapshot of an engine's worker pool, exposed via system.status.
 type Status struct {
 	AgentID     string `json:"agent_id,omitempty"`
 	WorkerCount int    `json:"worker_count"`
@@ -83,14 +88,16 @@ type Engine struct {
 	bus     *bus.Bus
 	agentID string
 
-	once sync.Once
-	wg   sync.WaitGroup
+	once sync.Once      // ensures Start runs exactly once
+	wg   sync.WaitGroup // tracks worker goroutines for Drain
 
+	// cancelMu protects the cancels map. Lock ordering: cancelMu is a leaf
+	// lock — never hold it while acquiring another mutex or doing I/O.
 	cancelMu sync.RWMutex
-	cancels  map[string]context.CancelFunc
+	cancels  map[string]context.CancelFunc // guarded by cancelMu
 
-	activeTasks atomic.Int32
-	lastError   atomic.Pointer[string]
+	activeTasks atomic.Int32           // current in-flight task count
+	lastError   atomic.Pointer[string] // most recent error message
 }
 
 func New(store *persistence.Store, proc Processor, cfg Config, pol ...policy.Checker) *Engine {
@@ -154,9 +161,9 @@ func (e *Engine) Drain(timeout time.Duration) {
 	}()
 	select {
 	case <-done:
-		slog.Info("engine drained cleanly")
+		slog.Info("engine drained cleanly", "agent_id", e.agentID)
 	case <-time.After(timeout):
-		slog.Warn("engine drain timeout; marking in-flight tasks for recovery", "timeout", timeout)
+		slog.Warn("engine drain timeout; marking in-flight tasks for recovery", "timeout", timeout, "agent_id", e.agentID)
 		// In-flight tasks that have active leases will be recovered on next startup
 		// via RecoverRunningTasks, so no explicit action needed here.
 	}
@@ -219,12 +226,22 @@ func (e *Engine) worker(ctx context.Context) {
 }
 
 func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
-	// GC-SPEC-RUN-004: Propagate trace_id for this task's execution scope.
+	// GC-SPEC-RUN-004: Propagate trace_id and run_id for this task's execution scope.
 	traceID := shared.NewTraceID()
+	runID := shared.NewRunID()
 	ctx = shared.WithTraceID(ctx, traceID)
+	ctx = shared.WithRunID(ctx, runID)
+	// GC-SPEC-QUE-006: Propagate task_id so tools can build idempotency keys.
+	ctx = shared.WithTaskID(ctx, task.ID)
 	// Propagate agent_id so tools (send_message, read_messages) know which agent is calling.
 	ctx = shared.WithAgentID(ctx, e.agentID)
-	slog.Info("task processing", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID)
+	slog.Info("task processing", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID, "run_id", runID, "agent_id", e.agentID)
+
+	// bgCtx carries observability values (trace_id, run_id) but is not tied to
+	// cancellation, so it can safely be used for store writes after the task
+	// context expires.
+	bgCtx := shared.WithTraceID(context.Background(), traceID)
+	bgCtx = shared.WithRunID(bgCtx, runID)
 
 	taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
 	e.activeTasks.Add(1)
@@ -243,12 +260,12 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 
 	// Observe cancellation before processing boundary (GC-SPEC-STM-005).
 	if taskCtx.Err() != nil {
-		_, _ = e.store.AbortTask(context.Background(), task.ID)
+		_, _ = e.store.AbortTask(bgCtx, task.ID)
 		e.publishEvent("task.canceled", map[string]string{"task_id": task.ID, "session_id": task.SessionID})
 		return
 	}
-	if cancelled, _ := e.store.IsCancelRequested(context.Background(), task.ID); cancelled {
-		_, _ = e.store.AbortTask(context.Background(), task.ID)
+	if cancelled, _ := e.store.IsCancelRequested(bgCtx, task.ID); cancelled {
+		_, _ = e.store.AbortTask(bgCtx, task.ID)
 		e.publishEvent("task.canceled", map[string]string{"task_id": task.ID, "session_id": task.SessionID})
 		return
 	}
@@ -262,11 +279,11 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 				return
 			case <-ticker.C:
 				// Check cooperative cancel flag during heartbeat (GC-SPEC-STM-005).
-				if cancelled, _ := e.store.IsCancelRequested(context.Background(), task.ID); cancelled {
+				if cancelled, _ := e.store.IsCancelRequested(bgCtx, task.ID); cancelled {
 					cancel() // Triggers context cancellation for the processor.
 					return
 				}
-				ok, err := e.store.HeartbeatLease(context.Background(), task.ID, task.LeaseOwner)
+				ok, err := e.store.HeartbeatLease(bgCtx, task.ID, task.LeaseOwner)
 				if err != nil {
 					e.setLastError(fmt.Errorf("lease heartbeat: %w", err))
 					continue
@@ -283,11 +300,12 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 		if errors.Is(taskCtx.Err(), context.DeadlineExceeded) {
 			err = fmt.Errorf("task timeout exceeded: %w", taskCtx.Err())
 		} else if errors.Is(taskCtx.Err(), context.Canceled) {
-			_, _ = e.store.AbortTask(context.Background(), task.ID)
+			_, _ = e.store.AbortTask(bgCtx, task.ID)
 			return
 		}
 		e.setLastError(err)
-		_, _ = e.store.HandleTaskFailure(context.Background(), task.ID, err.Error())
+		slog.Warn("task failed", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID, "run_id", runID, "agent_id", e.agentID, "error", err.Error())
+		_, _ = e.store.HandleTaskFailure(bgCtx, task.ID, err.Error())
 		e.publishEvent("task.failed", map[string]string{"task_id": task.ID, "session_id": task.SessionID})
 		return
 	}
@@ -295,26 +313,29 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 	// Invariant: never write success result once context is canceled.
 	if taskCtx.Err() != nil {
 		if errors.Is(taskCtx.Err(), context.Canceled) {
-			_, _ = e.store.AbortTask(context.Background(), task.ID)
+			_, _ = e.store.AbortTask(bgCtx, task.ID)
 			e.publishEvent("task.canceled", map[string]string{"task_id": task.ID, "session_id": task.SessionID})
 			return
 		}
 		err = fmt.Errorf("skip complete after context end: %w", taskCtx.Err())
 		e.setLastError(err)
-		_, _ = e.store.HandleTaskFailure(context.Background(), task.ID, err.Error())
+		slog.Warn("task failed", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID, "run_id", runID, "agent_id", e.agentID, "error", err.Error())
+		_, _ = e.store.HandleTaskFailure(bgCtx, task.ID, err.Error())
 		e.publishEvent("task.failed", map[string]string{"task_id": task.ID, "session_id": task.SessionID})
 		return
 	}
 
-	if err := e.store.CompleteTask(context.Background(), task.ID, result); err != nil {
-		e.setLastError(err)
+	if err := e.store.CompleteTask(bgCtx, task.ID, result); err != nil {
+		e.setLastError(fmt.Errorf("complete task: %w", err))
+		slog.Error("failed to complete task", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID, "run_id", runID, "agent_id", e.agentID, "error", err)
 		return
 	}
+	slog.Info("task succeeded", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID, "run_id", runID, "agent_id", e.agentID)
 	e.publishEvent("task.succeeded", map[string]string{"task_id": task.ID, "session_id": task.SessionID})
 
 	var payload chatResultPayload
 	if json.Unmarshal([]byte(result), &payload) == nil && payload.Reply != "" {
-		_ = e.store.AddHistory(context.Background(), task.SessionID, "assistant", payload.Reply, tokenutil.EstimateTokens(payload.Reply))
+		_ = e.store.AddHistory(bgCtx, task.SessionID, e.agentID, "assistant", payload.Reply, tokenutil.EstimateTokens(payload.Reply))
 	}
 }
 
@@ -367,14 +388,14 @@ func (e *Engine) createChatTask(ctx context.Context, agentID, sessionID, content
 		}
 	}
 	if err := e.store.EnsureSession(ctx, sessionID); err != nil {
-		return "", err
+		return "", fmt.Errorf("create chat task: ensure session: %w", err)
 	}
-	if err := e.store.AddHistory(ctx, sessionID, "user", content, tokenutil.EstimateTokens(content)); err != nil {
-		return "", err
+	if err := e.store.AddHistory(ctx, sessionID, agentID, "user", content, tokenutil.EstimateTokens(content)); err != nil {
+		return "", fmt.Errorf("create chat task: add history: %w", err)
 	}
 	payload, err := json.Marshal(chatTaskPayload{Content: content})
 	if err != nil {
-		return "", fmt.Errorf("encode task payload: %w", err)
+		return "", fmt.Errorf("create chat task: encode payload: %w", err)
 	}
 	if agentID != "" {
 		return e.store.CreateTaskForAgent(ctx, agentID, sessionID, string(payload))
@@ -411,15 +432,15 @@ func (e *Engine) streamChatTask(ctx context.Context, agentID, sessionID, content
 		}
 	}
 	if err := e.store.EnsureSession(ctx, sessionID); err != nil {
-		return "", err
+		return "", fmt.Errorf("stream chat task: ensure session: %w", err)
 	}
-	if err := e.store.AddHistory(ctx, sessionID, "user", content, tokenutil.EstimateTokens(content)); err != nil {
-		return "", err
+	if err := e.store.AddHistory(ctx, sessionID, agentID, "user", content, tokenutil.EstimateTokens(content)); err != nil {
+		return "", fmt.Errorf("stream chat task: add history: %w", err)
 	}
 
 	payload, err := json.Marshal(chatTaskPayload{Content: content})
 	if err != nil {
-		return "", fmt.Errorf("encode task payload: %w", err)
+		return "", fmt.Errorf("stream chat task: encode payload: %w", err)
 	}
 
 	var taskID string
@@ -429,38 +450,41 @@ func (e *Engine) streamChatTask(ctx context.Context, agentID, sessionID, content
 		taskID, err = e.store.CreateTask(ctx, sessionID, string(payload))
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("stream chat task: create task: %w", err)
 	}
 
-	go func() {
-		taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
-		defer cancel()
+	// Run streaming synchronously so that the caller (HTTP/WS handler) blocks
+	// until all chunks have been delivered. Previously this ran in a goroutine,
+	// which caused the OpenAI SSE handler to send [DONE] before any chunks.
+	e.wg.Add(1)
+	defer e.wg.Done()
 
-		if e.proc == nil {
-			slog.Error("processor not initialized for streaming")
-			return
-		}
+	taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
+	defer cancel()
 
-		var brain Brain
-		switch p := e.proc.(type) {
-		case EchoProcessor:
-			brain = p.Brain
-		}
+	if e.proc == nil {
+		_, _ = e.store.HandleTaskFailure(context.Background(), taskID, "processor not initialized for streaming")
+		return taskID, fmt.Errorf("processor not initialized for streaming")
+	}
 
-		if brain == nil {
-			slog.Error("brain not available for streaming")
-			return
-		}
+	var brain Brain
+	switch p := e.proc.(type) {
+	case EchoProcessor:
+		brain = p.Brain
+	}
 
-		if err := brain.Stream(taskCtx, sessionID, content, onChunk); err != nil {
-			slog.Error("streaming failed", "error", err)
-			_, _ = e.store.HandleTaskFailure(taskCtx, taskID, err.Error())
-			return
-		}
+	if brain == nil {
+		_, _ = e.store.HandleTaskFailure(context.Background(), taskID, "brain not available for streaming")
+		return taskID, fmt.Errorf("brain not available for streaming")
+	}
 
-		_ = e.store.CompleteTask(taskCtx, taskID, `{"reply": "streamed"}`)
-	}()
+	if err := brain.Stream(taskCtx, sessionID, content, onChunk); err != nil {
+		slog.Error("streaming failed", "error", err)
+		_, _ = e.store.HandleTaskFailure(context.Background(), taskID, err.Error())
+		return taskID, nil // task failure recorded; return taskID so caller can check status
+	}
 
+	_ = e.store.CompleteTask(context.Background(), taskID, `{"reply": "streamed"}`)
 	return taskID, nil
 }
 
@@ -473,8 +497,8 @@ func (e *Engine) AbortTask(ctx context.Context, taskID string) (bool, error) {
 	}
 	aborted, err := e.store.AbortTask(ctx, taskID)
 	if err != nil {
-		e.setLastError(err)
-		return false, err
+		e.setLastError(fmt.Errorf("abort task: %w", err))
+		return false, fmt.Errorf("abort task: %w", err)
 	}
 	return aborted || ok, nil
 }

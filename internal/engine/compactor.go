@@ -48,10 +48,11 @@ func NewCompactor(store *persistence.Store, brain Brain, provider, model string,
 // If over threshold: summarize oldest messages using LLM, archive originals,
 // insert summary as system message.
 // Returns the compacted history ready for LLM context.
-func (c *Compactor) CompactIfNeeded(ctx context.Context, sessionID string) ([]persistence.HistoryItem, error) {
-	// 1. Load all messages for session (limit 1000 to catch overflow).
+// agentID scopes history to a single agent; pass "" to load all agents' messages.
+func (c *Compactor) CompactIfNeeded(ctx context.Context, sessionID, agentID string) ([]persistence.HistoryItem, error) {
+	// 1. Load all messages for session+agent (limit 1000 to catch overflow).
 	// We load "active" messages (archived_at IS NULL).
-	items, err := c.store.ListHistory(ctx, sessionID, 1000)
+	items, err := c.store.ListHistory(ctx, sessionID, agentID, 1000)
 	if err != nil {
 		return nil, fmt.Errorf("list history for compaction: %w", err)
 	}
@@ -205,10 +206,10 @@ Conversation:
 	// 10. Insert summary as a system role message.
 	summaryContent := fmt.Sprintf("Previous conversation summary: %s", summary)
 	summaryTokens := tokenutil.EstimateTokens(summaryContent)
-	if err := c.store.AddHistory(ctx, sessionID, "system", summaryContent, summaryTokens); err != nil {
+	if err := c.store.AddHistory(ctx, sessionID, agentID, "system", summaryContent, summaryTokens); err != nil {
 		return nil, fmt.Errorf("add summary message: %w", err)
 	}
 
 	// 11. Return fresh history.
-	return c.store.ListHistory(ctx, sessionID, 1000)
+	return c.store.ListHistory(ctx, sessionID, agentID, 1000)
 }

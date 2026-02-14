@@ -15,6 +15,7 @@ import (
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/basket/go-claw/internal/safety"
+	"github.com/basket/go-claw/internal/shared"
 	"github.com/basket/go-claw/internal/sandbox/legacy"
 	"github.com/basket/go-claw/internal/sandbox/wasm"
 	"github.com/basket/go-claw/internal/skills"
@@ -435,10 +436,16 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 		}
 	}
 
+	// Extract agent ID from context for per-agent history isolation.
+	agentID := shared.AgentID(ctx)
+	if agentID == "" {
+		agentID = shared.DefaultAgentID
+	}
+
 	// Build conversation history from DB (compacted if necessary)
-	history, err := b.compactor.CompactIfNeeded(ctx, sessionID)
+	history, err := b.compactor.CompactIfNeeded(ctx, sessionID, agentID)
 	if err != nil {
-		slog.Warn("failed to load/compact session history", "session_id", sessionID, "error", err)
+		slog.Warn("failed to load/compact session history", "session_id", sessionID, "agent_id", agentID, "error", err)
 		// Continue without history rather than failing
 	}
 
@@ -459,6 +466,8 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 			systemPrompt = systemPrompt + "\n\n" + formatSkillInjection(entry.Name, entry.Instructions)
 		}
 	}
+	// Escape % characters to prevent fmt.Sprintf corruption in ai.WithSystem().
+	systemPrompt = strings.ReplaceAll(systemPrompt, "%", "%%")
 	opts = append(opts, ai.WithSystem(systemPrompt))
 
 	// Add conversation history as messages
@@ -495,7 +504,7 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 			slog.Info("retrying without tools")
 			fallbackOpts := appendHistory([]ai.GenerateOption{
 				ai.WithPrompt(trimmed),
-				ai.WithSystem(defaultFallbackSystemPrompt(b.cfg.AgentName)),
+				ai.WithSystem(systemPrompt), // Reuse the same soul-injected prompt
 			})
 			resp, err = genkit.Generate(ctx, b.g, fallbackOpts...)
 			if err != nil {
@@ -570,10 +579,16 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 		return nil
 	}
 
+	// Extract agent ID from context for per-agent history isolation.
+	agentID := shared.AgentID(ctx)
+	if agentID == "" {
+		agentID = shared.DefaultAgentID
+	}
+
 	// Build conversation history from DB (compacted if necessary)
-	history, err := b.compactor.CompactIfNeeded(ctx, sessionID)
+	history, err := b.compactor.CompactIfNeeded(ctx, sessionID, agentID)
 	if err != nil {
-		slog.Warn("failed to load/compact session history for streaming", "session_id", sessionID, "error", err)
+		slog.Warn("failed to load/compact session history for streaming", "session_id", sessionID, "agent_id", agentID, "error", err)
 	}
 
 	// Build system prompt (read-lock for hot-reload safety).
@@ -588,6 +603,8 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 			systemPrompt = systemPrompt + "\n\n" + formatSkillInjection(entry.Name, entry.Instructions)
 		}
 	}
+	// Escape % characters to prevent fmt.Sprintf corruption in ai.WithSystem().
+	systemPrompt = strings.ReplaceAll(systemPrompt, "%", "%%")
 
 	// Build generate options
 	opts := []ai.GenerateOption{
@@ -650,7 +667,7 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 				slog.Warn("leak detector triggered on streaming output", "session_id", sessionID, "findings_count", len(findings))
 			}
 		}
-		if err := b.store.AddHistory(ctx, sessionID, "assistant", finalReply, tokenutil.EstimateTokens(finalReply)); err != nil {
+		if err := b.store.AddHistory(ctx, sessionID, agentID, "assistant", finalReply, tokenutil.EstimateTokens(finalReply)); err != nil {
 			slog.Warn("failed to save streaming response to history", "error", err)
 		}
 	}
@@ -666,17 +683,6 @@ func defaultSystemPrompt(agentName string) string {
 	// Keep this prompt stable and tool-forward; don't hardcode the app name when a custom agent name is set.
 	return fmt.Sprintf(
 		"You are %s, an autonomous AI agent. Act decisively: when the user asks you to search, read, or look something up, use your tools immediately — never ask for confirmation first. If a search returns no results, retry with different keywords automatically. Provide accurate, well-sourced answers and cite your sources.",
-		name,
-	)
-}
-
-func defaultFallbackSystemPrompt(agentName string) string {
-	name := strings.TrimSpace(agentName)
-	if name == "" {
-		name = "GoClaw"
-	}
-	return fmt.Sprintf(
-		"You are %s, an autonomous AI agent. Answer the following question using your training knowledge. Be helpful and accurate.",
 		name,
 	)
 }

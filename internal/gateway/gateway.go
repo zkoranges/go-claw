@@ -15,6 +15,8 @@ import (
 
 	"github.com/basket/go-claw/internal/agent"
 	"github.com/basket/go-claw/internal/audit"
+	"github.com/basket/go-claw/internal/bus"
+	"github.com/basket/go-claw/internal/config"
 	"github.com/basket/go-claw/internal/engine"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
@@ -43,6 +45,7 @@ type Config struct {
 	Store    *persistence.Store
 	Registry *agent.Registry
 	Policy   policy.Checker
+	Bus      *bus.Bus
 
 	AuthToken string
 
@@ -56,6 +59,11 @@ type Config struct {
 	// ApprovalTimeout is the duration after which unanswered approval requests
 	// default to deny (GC-SPEC-SEC-008). Zero means 60s.
 	ApprovalTimeout time.Duration
+
+	// GC-SPEC-TUI-001: Config/policy mutation for ACP parity with TUI.
+	LivePolicy *policy.LivePolicy // nil = config mutations unavailable
+	HomeDir    string
+	Cfg        *config.Config
 
 	ToolsUpdated <-chan string
 	TinygoStatus func() (available bool, detail string)
@@ -79,6 +87,12 @@ type client struct {
 	conn       *websocket.Conn
 	mu         sync.Mutex
 	handshaken bool
+
+	// Event subscription state for session.events.subscribe.
+	subMu         sync.Mutex
+	subscribedSes map[string]int64 // session_id → last forwarded event_id
+	busSub        *bus.Subscription
+	busCancel     context.CancelFunc
 }
 
 type approvalRequest struct {
@@ -87,6 +101,7 @@ type approvalRequest struct {
 	Details   string    `json:"details,omitempty"`
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
+	done      chan struct{}
 }
 
 type rpcRequest struct {
@@ -164,6 +179,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		replayBacklog = eventCount
 	}
 
+	agentCount := len(s.cfg.Registry.ListRunningAgents())
+
 	payload := map[string]any{
 		"healthy":               dbOK,
 		"db_ok":                 dbOK,
@@ -171,6 +188,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		"skill_runtime":         tinygoAvailable,
 		"skill_detail":          tinygoDetail,
 		"replay_backlog_events": replayBacklog,
+		"agent_count":           agentCount,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if !dbOK {
@@ -190,21 +208,44 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	mem := &runtime.MemStats{}
 	runtime.ReadMemStats(mem)
 
-	// Aggregate active tasks from all agents.
+	// Aggregate active tasks from all agents; build per-agent breakdown.
 	var activeLanes int32
-	for _, a := range s.cfg.Registry.ListRunningAgents() {
-		activeLanes += a.Engine.Status().ActiveTasks
+	runningAgents := s.cfg.Registry.ListRunningAgents()
+	perAgent := make([]map[string]any, 0, len(runningAgents))
+	for _, a := range runningAgents {
+		st := a.Engine.Status()
+		activeLanes += st.ActiveTasks
+		perAgent = append(perAgent, map[string]any{
+			"agent_id":     st.AgentID,
+			"active_tasks": st.ActiveTasks,
+			"worker_count": st.WorkerCount,
+		})
+	}
+
+	// Inter-agent message count.
+	var agentMsgCount int64
+	if c, err := s.cfg.Store.TotalAgentMessageCount(ctx); err == nil {
+		agentMsgCount = c
+	}
+
+	var delegationCount int64
+	if c, err := s.cfg.Store.TotalDelegationCount(ctx); err == nil {
+		delegationCount = c
 	}
 
 	payload := map[string]any{
-		"pending_tasks":    mc.Pending,
-		"running_tasks":    mc.Running,
-		"active_lanes":     activeLanes,
-		"lease_expiries":   mc.LeaseExpiries,
-		"retries":          mc.RetryWait,
-		"dlq_size":         mc.DeadLetter,
-		"policy_deny_rate": audit.DenyCount(),
-		"alloc_bytes":      mem.Alloc,
+		"pending_tasks":        mc.Pending,
+		"running_tasks":        mc.Running,
+		"active_lanes":         activeLanes,
+		"lease_expiries":       mc.LeaseExpiries,
+		"retries":              mc.RetryWait,
+		"dlq_size":             mc.DeadLetter,
+		"policy_deny_rate":     audit.DenyCount(),
+		"alloc_bytes":          mem.Alloc,
+		"agent_count":          len(runningAgents),
+		"agent_messages_total": agentMsgCount,
+		"delegations_total":    delegationCount,
+		"agents":               perAgent,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
@@ -249,6 +290,26 @@ func (s *Server) handlePrometheusMetrics(w http.ResponseWriter, r *http.Request)
 	fmt.Fprintf(w, "# HELP goclaw_alloc_bytes Current allocated memory in bytes.\n")
 	fmt.Fprintf(w, "# TYPE goclaw_alloc_bytes gauge\n")
 	fmt.Fprintf(w, "goclaw_alloc_bytes %d\n", mem.Alloc)
+	runningAgents := s.cfg.Registry.ListRunningAgents()
+	fmt.Fprintf(w, "# HELP goclaw_agent_count Number of active agents.\n")
+	fmt.Fprintf(w, "# TYPE goclaw_agent_count gauge\n")
+	fmt.Fprintf(w, "goclaw_agent_count %d\n", len(runningAgents))
+	fmt.Fprintf(w, "# HELP goclaw_agent_active_tasks Active tasks per agent.\n")
+	fmt.Fprintf(w, "# TYPE goclaw_agent_active_tasks gauge\n")
+	for _, a := range runningAgents {
+		st := a.Engine.Status()
+		fmt.Fprintf(w, "goclaw_agent_active_tasks{agent_id=%q} %d\n", st.AgentID, st.ActiveTasks)
+	}
+	if msgCount, err := s.cfg.Store.TotalAgentMessageCount(ctx); err == nil {
+		fmt.Fprintf(w, "# HELP goclaw_agent_messages_total Total inter-agent messages.\n")
+		fmt.Fprintf(w, "# TYPE goclaw_agent_messages_total counter\n")
+		fmt.Fprintf(w, "goclaw_agent_messages_total %d\n", msgCount)
+	}
+	if delegations, err := s.cfg.Store.TotalDelegationCount(ctx); err == nil {
+		fmt.Fprintf(w, "# HELP goclaw_delegations_total Total delegate_task invocations.\n")
+		fmt.Fprintf(w, "# TYPE goclaw_delegations_total counter\n")
+		fmt.Fprintf(w, "goclaw_delegations_total %d\n", delegations)
+	}
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -321,10 +382,12 @@ func requiredCapabilityForMethod(method string) string {
 	case "agent.chat", "agent.chat.stream", "agent.abort", "approval.request", "approval.respond", "session.purge":
 		return "acp.mutate"
 	case "session.history", "session.list", "session.events.subscribe", "system.status", "approval.list",
-		"cron.list", "subtask.list", "agent.list", "agent.status":
+		"cron.list", "subtask.list", "agent.list", "agent.status", "incident.export",
+		"config.list":
 		return "acp.read"
 	case "cron.add", "cron.remove", "cron.enable", "cron.disable", "subtask.create",
-		"agent.create", "agent.remove":
+		"agent.create", "agent.remove",
+		"config.set", "config.model.set", "policy.domain.add":
 		return "acp.mutate"
 	default:
 		return ""
@@ -405,10 +468,11 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 		}
 		agentID := p.AgentID
 		if agentID == "" {
-			agentID = "default"
+			agentID = shared.DefaultAgentID
 		}
 		// GC-SPEC-RUN-004: Generate trace_id for this request.
-		traceCtx := shared.WithTraceID(ctx, shared.NewTraceID())
+		traceID := shared.NewTraceID()
+		traceCtx := shared.WithTraceID(ctx, traceID)
 		taskID, err := s.cfg.Registry.CreateChatTask(traceCtx, agentID, p.SessionID, p.Content)
 		if err != nil {
 			if errors.Is(err, engine.ErrQueueSaturated) {
@@ -418,6 +482,7 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 			}
 			break
 		}
+		slog.Info("ws: agent.chat task created", "task_id", taskID, "agent_id", agentID, "session_id", p.SessionID, "trace_id", traceID)
 		result = map[string]any{"task_id": taskID}
 	case "agent.chat.stream":
 		var p struct {
@@ -440,10 +505,11 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 		}
 		agentID := p.AgentID
 		if agentID == "" {
-			agentID = "default"
+			agentID = shared.DefaultAgentID
 		}
 		// Generate trace_id for this request.
-		traceCtx := shared.WithTraceID(ctx, shared.NewTraceID())
+		streamTraceID := shared.NewTraceID()
+		traceCtx := shared.WithTraceID(ctx, streamTraceID)
 		streamTaskID, err := s.cfg.Registry.StreamChatTask(traceCtx, agentID, p.SessionID, p.Content, func(content string) error {
 			// Stream chunks back to client as notifications.
 			// task_id is sent in the initial RPC response, not in every chunk,
@@ -462,6 +528,7 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 			}
 			break
 		}
+		slog.Info("ws: agent.chat.stream task created", "task_id", streamTaskID, "agent_id", agentID, "session_id", p.SessionID, "trace_id", streamTraceID)
 		result = map[string]any{"task_id": streamTaskID}
 	case "agent.abort":
 		var p struct {
@@ -489,7 +556,7 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 		if p.Limit <= 0 || p.Limit > 100 {
 			p.Limit = 100
 		}
-		items, err := s.cfg.Store.ListHistory(ctx, p.SessionID, p.Limit)
+		items, err := s.cfg.Store.ListHistory(ctx, p.SessionID, "", p.Limit)
 		if err != nil {
 			rpcErr = &rpcError{Code: ErrCodeInternal, Message: err.Error()}
 			break
@@ -551,6 +618,9 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 				},
 			})
 		}
+		// Register for live event forwarding via the bus.
+		s.subscribeClientToSession(c, p.SessionID, maxEventID)
+
 		result = map[string]any{
 			"subscribed":      true,
 			"replayed":        len(events),
@@ -585,6 +655,7 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 			Details:   strings.TrimSpace(p.Details),
 			Status:    "PENDING",
 			CreatedAt: time.Now().UTC(),
+			done:      make(chan struct{}),
 		}
 		status := record.Status
 		s.approvalsMu.Lock()
@@ -629,6 +700,12 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 			}
 			responseApprovalID = record.ID
 			responseStatus = record.Status
+			// Signal any blocking RequestApproval caller.
+			select {
+			case <-record.done:
+			default:
+				close(record.done)
+			}
 		}
 		s.approvalsMu.Unlock()
 		if !ok {
@@ -704,6 +781,7 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 				"agent_id":     ac.AgentID,
 				"display_name": ac.DisplayName,
 				"provider":     ac.Provider,
+				"model":        ac.Model,
 				"worker_count": ac.WorkerCount,
 				"status":       "active",
 			}
@@ -726,6 +804,7 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 			"tinygo_detail":    tinygoDetail,
 			"skills":           skillStatus,
 			"last_error":       lastError,
+			"agent_count":      len(agentStatuses),
 			"agents":           agentStatuses,
 			"time_unix":        time.Now().Unix(),
 		}
@@ -893,9 +972,11 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 			SkillsFilter:       p.SkillsFilter,
 		}
 		if err := s.cfg.Registry.CreateAgent(ctx, cfg); err != nil {
+			slog.Warn("ws: agent.create failed", "agent_id", p.AgentID, "error", err)
 			rpcErr = &rpcError{Code: ErrCodeInternal, Message: err.Error()}
 			break
 		}
+		slog.Info("ws: agent.create succeeded", "agent_id", p.AgentID, "provider", p.Provider, "model", p.Model)
 		result = map[string]any{"agent_id": p.AgentID, "status": "active"}
 	case "agent.remove":
 		var p struct {
@@ -906,10 +987,111 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 			break
 		}
 		if err := s.cfg.Registry.RemoveAgent(ctx, p.AgentID, 5*time.Second); err != nil {
+			slog.Warn("ws: agent.remove failed", "agent_id", p.AgentID, "error", err)
 			rpcErr = &rpcError{Code: ErrCodeInternal, Message: err.Error()}
 			break
 		}
+		slog.Info("ws: agent.remove succeeded", "agent_id", p.AgentID)
 		result = map[string]any{"agent_id": p.AgentID, "removed": true}
+	case "incident.export":
+		// GC-SPEC-OBS-006: Bounded run bundle for offline debugging.
+		var p struct {
+			TaskID string `json:"task_id"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil || p.TaskID == "" {
+			rpcErr = &rpcError{Code: ErrCodeInvalid, Message: "task_id is required"}
+			break
+		}
+		bundle, err := s.cfg.Store.ExportIncident(ctx, p.TaskID, s.cfg.ConfigFingerprint)
+		if err != nil {
+			rpcErr = &rpcError{Code: ErrCodeInternal, Message: err.Error()}
+			break
+		}
+		result = bundle
+
+	// GC-SPEC-TUI-001: ACP parity — config and policy mutation methods.
+	case "config.list":
+		masked := make(map[string]string)
+		if s.cfg.Cfg != nil {
+			for k, v := range s.cfg.Cfg.APIKeys {
+				if len(v) > 4 {
+					masked[k] = v[:4] + "****"
+				} else {
+					masked[k] = "****"
+				}
+			}
+		}
+		result = map[string]any{"api_keys": masked}
+
+	case "config.set":
+		var p struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil || p.Key == "" || p.Value == "" {
+			rpcErr = &rpcError{Code: ErrCodeInvalid, Message: "key and value are required"}
+			break
+		}
+		if s.cfg.HomeDir == "" {
+			rpcErr = &rpcError{Code: ErrCodeInternal, Message: "home dir not configured"}
+			break
+		}
+		if err := config.SetAPIKey(s.cfg.HomeDir, p.Key, p.Value); err != nil {
+			rpcErr = &rpcError{Code: ErrCodeInternal, Message: err.Error()}
+			break
+		}
+		if s.cfg.Cfg != nil {
+			if s.cfg.Cfg.APIKeys == nil {
+				s.cfg.Cfg.APIKeys = make(map[string]string)
+			}
+			s.cfg.Cfg.APIKeys[p.Key] = p.Value
+		}
+		result = map[string]any{"key": p.Key, "saved": true}
+
+	case "config.model.set":
+		var p struct {
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil || p.Model == "" {
+			rpcErr = &rpcError{Code: ErrCodeInvalid, Message: "model is required"}
+			break
+		}
+		if s.cfg.HomeDir == "" {
+			rpcErr = &rpcError{Code: ErrCodeInternal, Message: "home dir not configured"}
+			break
+		}
+		if p.Provider == "" {
+			p.Provider = "google"
+		}
+		if err := config.SetModel(s.cfg.HomeDir, p.Provider, p.Model); err != nil {
+			rpcErr = &rpcError{Code: ErrCodeInternal, Message: err.Error()}
+			break
+		}
+		if s.cfg.Cfg != nil {
+			s.cfg.Cfg.LLMProvider = p.Provider
+			s.cfg.Cfg.GeminiModel = p.Model
+		}
+		result = map[string]any{"provider": p.Provider, "model": p.Model, "saved": true}
+
+	case "policy.domain.add":
+		var p struct {
+			Domain string `json:"domain"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil || p.Domain == "" {
+			rpcErr = &rpcError{Code: ErrCodeInvalid, Message: "domain is required"}
+			break
+		}
+		if s.cfg.LivePolicy == nil {
+			rpcErr = &rpcError{Code: ErrCodeInternal, Message: "policy not available"}
+			break
+		}
+		if err := s.cfg.LivePolicy.AllowDomain(p.Domain); err != nil {
+			rpcErr = &rpcError{Code: ErrCodeInternal, Message: err.Error()}
+			break
+		}
+		result = map[string]any{"domain": p.Domain, "allowed": true}
+
 	case "agent.list":
 		configs := s.cfg.Registry.ListAgents()
 		agents := make([]map[string]any, len(configs))
@@ -998,6 +1180,82 @@ func (s *Server) PendingApprovals() []ApprovalSummary {
 	return out
 }
 
+// RespondToApproval sets the decision on an existing approval request.
+// This is used by the TUI to approve/deny without going through the WS RPC path (GC-SPEC-TUI-003).
+func (s *Server) RespondToApproval(approvalID, decision string) error {
+	decision = strings.ToLower(strings.TrimSpace(decision))
+	if decision != "approve" && decision != "deny" {
+		return fmt.Errorf("decision must be approve or deny")
+	}
+	s.approvalsMu.Lock()
+	record, ok := s.approvals[approvalID]
+	if !ok {
+		s.approvalsMu.Unlock()
+		return fmt.Errorf("approval request %q not found", approvalID)
+	}
+	if decision == "approve" {
+		record.Status = "APPROVED"
+	} else {
+		record.Status = "DENIED"
+	}
+	select {
+	case <-record.done:
+	default:
+		close(record.done)
+	}
+	s.approvalsMu.Unlock()
+	s.broadcast("approval.updated", map[string]any{
+		"approval_id": approvalID,
+		"status":      record.Status,
+	})
+	return nil
+}
+
+// RequestApproval creates an approval request and blocks until it is approved,
+// denied, or the context is cancelled. This implements tools.ApprovalBroker
+// (GC-SPEC-SEC-008) so that high-risk tool actions can require human approval
+// via ACP clients rather than being silently executed or unconditionally blocked.
+func (s *Server) RequestApproval(ctx context.Context, action, details string) (bool, error) {
+	approvalID := uuid.NewString()
+	record := &approvalRequest{
+		ID:        approvalID,
+		Action:    action,
+		Details:   details,
+		Status:    "PENDING",
+		CreatedAt: time.Now().UTC(),
+		done:      make(chan struct{}),
+	}
+	s.approvalsMu.Lock()
+	s.approvals[approvalID] = record
+	s.approvalsMu.Unlock()
+
+	s.broadcast("approval.required", map[string]any{
+		"approval_id": approvalID,
+		"action":      record.Action,
+		"details":     record.Details,
+		"status":      record.Status,
+		"created_at":  record.CreatedAt,
+	})
+	go s.approvalTimeoutDeny(approvalID)
+
+	// Block until decided or context cancelled.
+	select {
+	case <-record.done:
+		s.approvalsMu.Lock()
+		status := record.Status
+		s.approvalsMu.Unlock()
+		approved := status == "APPROVED"
+		if approved {
+			audit.Record("allow", "approval.decided", "approved", "", approvalID)
+		} else {
+			audit.Record("deny", "approval.decided", "denied", "", approvalID)
+		}
+		return approved, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
 const defaultApprovalTimeout = 60 * time.Second
 
 func (s *Server) approvalTimeout() time.Duration {
@@ -1019,6 +1277,12 @@ func (s *Server) approvalTimeoutDeny(approvalID string) {
 	record.Status = "DENIED"
 	updatedStatus := record.Status
 	updatedID := record.ID
+	// Signal any blocking RequestApproval caller.
+	select {
+	case <-record.done:
+	default:
+		close(record.done)
+	}
 	s.approvalsMu.Unlock()
 	audit.Record("deny", "approval.timeout", "approval_timeout_default_deny", "", approvalID)
 	s.broadcast("approval.updated", map[string]any{
@@ -1056,6 +1320,16 @@ func (s *Server) addClient(c *client) {
 }
 
 func (s *Server) removeClient(c *client) {
+	// Clean up bus subscription for event forwarding.
+	c.subMu.Lock()
+	if c.busCancel != nil {
+		c.busCancel()
+	}
+	if c.busSub != nil && s.cfg.Bus != nil {
+		s.cfg.Bus.Unsubscribe(c.busSub)
+	}
+	c.subMu.Unlock()
+
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
 	delete(s.clients, c)
@@ -1077,6 +1351,99 @@ func (c *client) isHandshaken() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.handshaken
+}
+
+// subscribeClientToSession registers a WS client for live event push on a session.
+// On the first subscription, it starts a bus listener goroutine that forwards
+// matching task events to the client's WebSocket connection.
+func (s *Server) subscribeClientToSession(c *client, sessionID string, lastEventID int64) {
+	if s.cfg.Bus == nil {
+		return
+	}
+
+	c.subMu.Lock()
+	defer c.subMu.Unlock()
+
+	if c.subscribedSes == nil {
+		c.subscribedSes = make(map[string]int64)
+	}
+	c.subscribedSes[sessionID] = lastEventID
+
+	// Start the bus listener goroutine on first subscription.
+	if c.busSub == nil {
+		c.busSub = s.cfg.Bus.Subscribe("task.")
+		var busCtx context.Context
+		busCtx, c.busCancel = context.WithCancel(context.Background())
+		go s.forwardBusEvents(busCtx, c)
+	}
+}
+
+// forwardBusEvents reads task lifecycle events from the bus and pushes new
+// task_events to the WS client for any session the client has subscribed to.
+func (s *Server) forwardBusEvents(ctx context.Context, c *client) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-c.busSub.Ch():
+			if !ok {
+				return
+			}
+			payload, _ := ev.Payload.(map[string]string)
+			if payload == nil {
+				continue
+			}
+			sessID := payload["session_id"]
+			if sessID == "" {
+				continue
+			}
+
+			c.subMu.Lock()
+			lastID, subscribed := c.subscribedSes[sessID]
+			c.subMu.Unlock()
+			if !subscribed {
+				continue
+			}
+
+			// Query new task events since the last forwarded event_id.
+			events, err := s.cfg.Store.ListTaskEventsFrom(ctx, sessID, lastID, 100)
+			if err != nil || len(events) == 0 {
+				continue
+			}
+
+			var maxSent int64
+			for _, te := range events {
+				_ = c.write(ctx, rpcResponse{
+					JSONRPC: "2.0",
+					Method:  "session.event",
+					Params: map[string]any{
+						"event_id":   te.EventID,
+						"task_id":    te.TaskID,
+						"session_id": te.SessionID,
+						"event_type": te.EventType,
+						"state_from": te.StateFrom,
+						"state_to":   te.StateTo,
+						"run_id":     te.RunID,
+						"trace_id":   te.TraceID,
+						"payload":    te.Payload,
+						"created_at": te.CreatedAt,
+					},
+				})
+				if te.EventID > maxSent {
+					maxSent = te.EventID
+				}
+			}
+
+			// Update high-water mark so we don't re-send.
+			if maxSent > 0 {
+				c.subMu.Lock()
+				if maxSent > c.subscribedSes[sessID] {
+					c.subscribedSes[sessID] = maxSent
+				}
+				c.subMu.Unlock()
+			}
+		}
+	}
 }
 
 // --- REST API handlers ---
@@ -1182,7 +1549,7 @@ func (s *Server) handleAPISessionMessages(w http.ResponseWriter, r *http.Request
 			limit = n
 		}
 	}
-	items, err := s.cfg.Store.ListHistory(r.Context(), sessionID, limit)
+	items, err := s.cfg.Store.ListHistory(r.Context(), sessionID, "", limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

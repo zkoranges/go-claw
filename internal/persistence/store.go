@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/basket/go-claw/internal/audit"
 	"github.com/basket/go-claw/internal/shared"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
@@ -44,8 +46,12 @@ const (
 	schemaVersionV7  = 7
 	schemaChecksumV7 = "gc-v7-2026-02-14-agent-messages"
 
-	schemaVersionLatest  = schemaVersionV7
-	schemaChecksumLatest = schemaChecksumV7
+	// v0.1 schema v8: adds messages.agent_id for per-agent history isolation.
+	schemaVersionV8  = 8
+	schemaChecksumV8 = "gc-v8-2026-02-14-agent-history"
+
+	schemaVersionLatest  = schemaVersionV8
+	schemaChecksumLatest = schemaChecksumV8
 
 	defaultLeaseDuration = 30 * time.Second
 
@@ -246,6 +252,58 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// GC-SPEC-PER-002: retryOnBusy retries f when SQLite returns BUSY or LOCKED,
+// using exponential backoff with bounded jitter. maxRetries=5 gives ~3s total
+// wait on top of the driver's busy_timeout (5s).
+func retryOnBusy(ctx context.Context, maxRetries int, f func() error) error {
+	const baseDelay = 50 * time.Millisecond
+	const maxDelay = 500 * time.Millisecond
+
+	var err error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		err = f()
+		if err == nil {
+			return nil
+		}
+		if !isSQLiteBusy(err) {
+			return err
+		}
+		if attempt == maxRetries {
+			return err
+		}
+		// Exponential backoff: 50ms, 100ms, 200ms, 400ms, 500ms (capped).
+		delay := baseDelay << uint(attempt)
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+		// Add jitter: ±25% of delay.
+		jitter := time.Duration(rand.IntN(int(delay / 2)))
+		delay = delay - delay/4 + jitter
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return err
+}
+
+// isSQLiteBusy checks if an error is a SQLite BUSY (5) or LOCKED (6) error.
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	// mattn/go-sqlite3 wraps errors as sqlite3.Error with Code field.
+	// Check the error string for the code to avoid a direct dependency
+	// on the sqlite3 package in non-CGO-importing code paths.
+	msg := err.Error()
+	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked") ||
+		strings.Contains(msg, "(5)") || // SQLITE_BUSY
+		strings.Contains(msg, "(6)") // SQLITE_LOCKED
+}
+
 func (s *Store) configurePragmas(ctx context.Context) error {
 	pragma := []string{
 		"PRAGMA journal_mode=WAL;",
@@ -318,6 +376,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		{schemaVersionV5, schemaChecksumV5},
 		{schemaVersionV6, schemaChecksumV6},
 		{schemaVersionV7, schemaChecksumV7},
+		{schemaVersionV8, schemaChecksumV8},
 	}
 	matched := false
 	for _, vc := range versionChecksums {
@@ -350,6 +409,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL REFERENCES sessions(id),
+			agent_id TEXT NOT NULL DEFAULT 'default',
 			role TEXT NOT NULL CHECK(role IN ('system', 'user', 'assistant', 'tool')),
 			content TEXT NOT NULL,
 			tokens INTEGER NOT NULL DEFAULT 0,
@@ -495,7 +555,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 			to_agent TEXT NOT NULL,
 			content TEXT NOT NULL,
 			read_at DATETIME,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
 	}
 
@@ -516,6 +576,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_tasks_available ON tasks(status, available_at, priority, created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_lease_expires ON tasks(lease_expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id, id);`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_session_agent ON messages(session_id, agent_id, id);`,
 		`CREATE INDEX IF NOT EXISTS idx_task_events_session_event_id ON task_events(session_id, event_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_task_events_task_event_id ON task_events(task_id, event_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, expires_at);`,
@@ -524,6 +585,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_agent_status ON tasks(agent_id, status, available_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_messages_to ON agent_messages(to_agent, read_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_messages_from ON agent_messages(from_agent);`,
 	}
 
 	for _, stmt := range indexStatements {
@@ -542,6 +604,10 @@ func (s *Store) initSchema(ctx context.Context) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration tx: %w", err)
 	}
+
+	// GC-SPEC-DATA-003: Emit migration audit event after successful migration.
+	audit.Record("allow", "data.migration", "migration_applied", "",
+		fmt.Sprintf("schema migrated from v%d to v%d (checksum %s)", maxVersion, schemaVersionLatest, schemaChecksumLatest))
 	return nil
 }
 
@@ -619,6 +685,8 @@ func (s *Store) applyBackfillsTx(ctx context.Context, tx *sql.Tx) error {
 		// v6: additional agent config fields for restore fidelity.
 		{stmt: `ALTER TABLE agents ADD COLUMN agent_emoji TEXT NOT NULL DEFAULT '';`, desc: "agents.agent_emoji"},
 		{stmt: `ALTER TABLE agents ADD COLUMN preferred_search TEXT NOT NULL DEFAULT '';`, desc: "agents.preferred_search"},
+		// v8: per-agent history isolation.
+		{stmt: `ALTER TABLE messages ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default';`, desc: "messages.agent_id"},
 	}
 	for _, a := range alterStatements {
 		if _, err := tx.ExecContext(ctx, a.stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -830,10 +898,12 @@ func (s *Store) appendTaskEventTx(ctx context.Context, tx *sql.Tx, taskID, sessi
 	if traceID == "-" {
 		traceID = sessionID
 	}
+	// GC-SPEC-RUN-004: Propagate run_id into task events.
+	runID := shared.RunID(ctx)
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO task_events (task_id, session_id, trace_id, event_type, state_from, state_to, payload_json, created_at)
-		VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, ?, CURRENT_TIMESTAMP);
-	`, taskID, sessionID, traceID, eventType, string(from), string(to), payload)
+		INSERT INTO task_events (task_id, session_id, run_id, trace_id, event_type, state_from, state_to, payload_json, created_at)
+		VALUES (?, ?, NULLIF(?, ''), ?, ?, NULLIF(?, ''), ?, ?, CURRENT_TIMESTAMP);
+	`, taskID, sessionID, runID, traceID, eventType, string(from), string(to), payload)
 	if err != nil {
 		return fmt.Errorf("insert task_event: %w", err)
 	}
@@ -920,34 +990,49 @@ func (s *Store) EnsureSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (s *Store) AddHistory(ctx context.Context, sessionID, role, content string, tokens int) error {
+func (s *Store) AddHistory(ctx context.Context, sessionID, agentID, role, content string, tokens int) error {
 	role = strings.ToLower(strings.TrimSpace(role))
 	switch role {
 	case "system", "user", "assistant", "tool":
 	default:
 		return fmt.Errorf("invalid role %q", role)
 	}
+	if agentID == "" {
+		agentID = "default"
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO messages (session_id, role, content, tokens, created_at)
-		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP);
-	`, sessionID, role, content, tokens)
+		INSERT INTO messages (session_id, agent_id, role, content, tokens, created_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
+	`, sessionID, agentID, role, content, tokens)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) ListHistory(ctx context.Context, sessionID string, limit int) ([]HistoryItem, error) {
+func (s *Store) ListHistory(ctx context.Context, sessionID, agentID string, limit int) ([]HistoryItem, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, session_id, role, content, tokens, created_at
-		FROM messages
-		WHERE session_id = ? AND archived_at IS NULL
-		ORDER BY id ASC
-		LIMIT ?;
-	`, sessionID, limit)
+	var rows *sql.Rows
+	var err error
+	if agentID != "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id, session_id, role, content, tokens, created_at
+			FROM messages
+			WHERE session_id = ? AND agent_id = ? AND archived_at IS NULL
+			ORDER BY id ASC
+			LIMIT ?;
+		`, sessionID, agentID, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT id, session_id, role, content, tokens, created_at
+			FROM messages
+			WHERE session_id = ? AND archived_at IS NULL
+			ORDER BY id ASC
+			LIMIT ?;
+		`, sessionID, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
 	}
@@ -1061,29 +1146,33 @@ func (s *Store) CreateTask(ctx context.Context, sessionID, payload string) (stri
 
 func (s *Store) createTask(ctx context.Context, agentID, sessionID, payload string) (string, error) {
 	taskID := uuid.NewString()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("begin create task tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	// GC-SPEC-PER-002: Retry transient lock errors with bounded jitter.
+	err := retryOnBusy(ctx, 5, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin create task tx: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
 
-	agent := agentID
-	if agent == "" {
-		agent = "default"
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO tasks (
-			id, session_id, type, status, attempt, max_attempts, available_at, agent_id, payload, created_at, updated_at
-		)
-		VALUES (?, ?, 'chat', ?, 0, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
-	`, taskID, sessionID, TaskStatusQueued, defaultMaxAttempts, agent, payload); err != nil {
-		return "", fmt.Errorf("create task: %w", err)
-	}
-	if err := s.appendTaskEventTx(ctx, tx, taskID, sessionID, "", TaskStatusQueued, "task.enqueued", `{"reason":"create_task"}`); err != nil {
+		agent := agentID
+		if agent == "" {
+			agent = "default"
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO tasks (
+				id, session_id, type, status, attempt, max_attempts, available_at, agent_id, payload, created_at, updated_at
+			)
+			VALUES (?, ?, 'chat', ?, 0, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+		`, taskID, sessionID, TaskStatusQueued, defaultMaxAttempts, agent, payload); err != nil {
+			return fmt.Errorf("create task: %w", err)
+		}
+		if err := s.appendTaskEventTx(ctx, tx, taskID, sessionID, "", TaskStatusQueued, "task.enqueued", `{"reason":"create_task"}`); err != nil {
+			return err
+		}
+		return tx.Commit()
+	})
+	if err != nil {
 		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit create task tx: %w", err)
 	}
 	return taskID, nil
 }
@@ -1093,73 +1182,81 @@ func (s *Store) ClaimNextPendingTask(ctx context.Context) (*Task, error) {
 }
 
 func (s *Store) claimNextPendingTask(ctx context.Context, agentID string) (*Task, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin claim tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var task Task
-	var query string
-	var args []any
-	if agentID == "" {
-		query = `
-			SELECT id, session_id, type, status, attempt, max_attempts, available_at,
-				COALESCE(last_error_code, ''), poison_count, payload,
-				COALESCE(result, ''), COALESCE(error, ''), COALESCE(lease_owner, ''),
-				lease_expires_at, created_at, updated_at, COALESCE(agent_id, 'default')
-			FROM tasks
-			WHERE status = ? AND available_at <= CURRENT_TIMESTAMP
-			ORDER BY priority DESC, created_at ASC, id ASC
-			LIMIT 1;`
-		args = []any{TaskStatusQueued}
-	} else {
-		query = `
-			SELECT id, session_id, type, status, attempt, max_attempts, available_at,
-				COALESCE(last_error_code, ''), poison_count, payload,
-				COALESCE(result, ''), COALESCE(error, ''), COALESCE(lease_owner, ''),
-				lease_expires_at, created_at, updated_at, COALESCE(agent_id, 'default')
-			FROM tasks
-			WHERE status = ? AND agent_id = ? AND available_at <= CURRENT_TIMESTAMP
-			ORDER BY priority DESC, created_at ASC, id ASC
-			LIMIT 1;`
-		args = []any{TaskStatusQueued, agentID}
-	}
-	row := tx.QueryRowContext(ctx, query, args...)
-	if scanErr := scanTask(row.Scan, &task); scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
-			_ = tx.Rollback()
-			return nil, nil
+	var result *Task
+	// GC-SPEC-PER-002: Retry transient lock errors with bounded jitter.
+	err := retryOnBusy(ctx, 5, func() error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin claim tx: %w", err)
 		}
-		return nil, fmt.Errorf("select pending task: %w", scanErr)
-	}
+		defer func() { _ = tx.Rollback() }()
 
-	ok, err := s.transitionTaskTx(ctx, tx, task.ID,
-		[]TaskStatus{TaskStatusQueued}, TaskStatusClaimed,
-		"task.claimed", `{"reason":"claim_next_pending"}`, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("claim task transition: %w", err)
-	}
-	if !ok {
-		_ = tx.Rollback()
-		return nil, nil
-	}
-	leaseOwner := uuid.NewString()
-	leaseExpiresAt := time.Now().UTC().Add(defaultLeaseDuration)
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE tasks
-		SET lease_owner = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND status = ?;
-	`, leaseOwner, leaseExpiresAt, task.ID, TaskStatusClaimed); err != nil {
-		return nil, fmt.Errorf("set claim lease: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit claim tx: %w", err)
-	}
-	task.Status = TaskStatusClaimed
-	task.LeaseOwner = leaseOwner
-	task.LeaseExpiresAt = &leaseExpiresAt
-	return &task, nil
+		var task Task
+		var query string
+		var args []any
+		if agentID == "" {
+			query = `
+				SELECT id, session_id, type, status, attempt, max_attempts, available_at,
+					COALESCE(last_error_code, ''), poison_count, payload,
+					COALESCE(result, ''), COALESCE(error, ''), COALESCE(lease_owner, ''),
+					lease_expires_at, created_at, updated_at, COALESCE(agent_id, 'default')
+				FROM tasks
+				WHERE status = ? AND available_at <= CURRENT_TIMESTAMP
+				ORDER BY priority DESC, created_at ASC, id ASC
+				LIMIT 1;`
+			args = []any{TaskStatusQueued}
+		} else {
+			query = `
+				SELECT id, session_id, type, status, attempt, max_attempts, available_at,
+					COALESCE(last_error_code, ''), poison_count, payload,
+					COALESCE(result, ''), COALESCE(error, ''), COALESCE(lease_owner, ''),
+					lease_expires_at, created_at, updated_at, COALESCE(agent_id, 'default')
+				FROM tasks
+				WHERE status = ? AND agent_id = ? AND available_at <= CURRENT_TIMESTAMP
+				ORDER BY priority DESC, created_at ASC, id ASC
+				LIMIT 1;`
+			args = []any{TaskStatusQueued, agentID}
+		}
+		row := tx.QueryRowContext(ctx, query, args...)
+		if scanErr := scanTask(row.Scan, &task); scanErr != nil {
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				_ = tx.Rollback()
+				result = nil
+				return nil
+			}
+			return fmt.Errorf("select pending task: %w", scanErr)
+		}
+
+		ok, err := s.transitionTaskTx(ctx, tx, task.ID,
+			[]TaskStatus{TaskStatusQueued}, TaskStatusClaimed,
+			"task.claimed", `{"reason":"claim_next_pending"}`, nil, nil)
+		if err != nil {
+			return fmt.Errorf("claim task transition: %w", err)
+		}
+		if !ok {
+			_ = tx.Rollback()
+			result = nil
+			return nil
+		}
+		leaseOwner := uuid.NewString()
+		leaseExpiresAt := time.Now().UTC().Add(defaultLeaseDuration)
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tasks
+			SET lease_owner = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ? AND status = ?;
+		`, leaseOwner, leaseExpiresAt, task.ID, TaskStatusClaimed); err != nil {
+			return fmt.Errorf("set claim lease: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit claim tx: %w", err)
+		}
+		task.Status = TaskStatusClaimed
+		task.LeaseOwner = leaseOwner
+		task.LeaseExpiresAt = &leaseExpiresAt
+		result = &task
+		return nil
+	})
+	return result, err
 }
 
 // StartTaskRun transitions a claimed task to running and pins the policy version (GC-SPEC-SEC-003).
@@ -1617,6 +1714,25 @@ func (s *Store) HandleTaskFailure(ctx context.Context, taskID, errMsg string) (F
 	}
 	_ = sessionID
 	return decision, nil
+}
+
+// CheckToolCallDedup checks whether a tool call has already been recorded as
+// successful. It does NOT insert a new record — use RegisterSuccessfulToolCall
+// after the side effect succeeds. Returns true if a matching SUCCEEDED record exists.
+func (s *Store) CheckToolCallDedup(ctx context.Context, idempotencyKey, requestHash string) (bool, error) {
+	var existingStatus, existingRequestHash string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT side_effect_status, request_hash
+		FROM tool_call_dedup
+		WHERE idempotency_key = ?;
+	`, idempotencyKey).Scan(&existingStatus, &existingRequestHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check dedupe row: %w", err)
+	}
+	return existingStatus == "SUCCEEDED" && existingRequestHash == requestHash, nil
 }
 
 // RegisterSuccessfulToolCall enforces at-most-once success semantics per idempotency key.
@@ -2107,9 +2223,10 @@ func (s *Store) ListTasksBySession(ctx context.Context, sessionID string) ([]Tas
 
 // RetentionResult holds counts of purged records from a retention run.
 type RetentionResult struct {
-	PurgedTaskEvents int64 `json:"purged_task_events"`
-	PurgedAuditLogs  int64 `json:"purged_audit_logs"`
-	PurgedMessages   int64 `json:"purged_messages"`
+	PurgedTaskEvents    int64 `json:"purged_task_events"`
+	PurgedAuditLogs     int64 `json:"purged_audit_logs"`
+	PurgedMessages      int64 `json:"purged_messages"`
+	PurgedAgentMessages int64 `json:"purged_agent_messages"`
 }
 
 // RunRetention deletes records older than the configured retention windows (GC-SPEC-DATA-005).
@@ -2142,6 +2259,14 @@ func (s *Store) RunRetention(ctx context.Context, taskEventDays, auditLogDays, m
 			return result, fmt.Errorf("purge messages: %w", err)
 		}
 		result.PurgedMessages, _ = res.RowsAffected()
+
+		// Purge read inter-agent messages older than the same retention window.
+		// Only messages that have been read (read_at IS NOT NULL) are eligible for purge.
+		res, err = s.db.ExecContext(ctx, `DELETE FROM agent_messages WHERE read_at IS NOT NULL AND created_at < ?;`, cutoff)
+		if err != nil {
+			return result, fmt.Errorf("purge agent_messages: %w", err)
+		}
+		result.PurgedAgentMessages, _ = res.RowsAffected()
 	}
 
 	return result, nil
@@ -2739,6 +2864,7 @@ func (s *Store) ListTasksPaginated(ctx context.Context, statusFilter string, lim
 
 // --- Agent CRUD (multi-agent support) ---
 
+// CreateAgent persists a new agent record to the agents table.
 func (s *Store) CreateAgent(ctx context.Context, rec AgentRecord) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO agents (agent_id, display_name, provider, model, soul, worker_count,
@@ -2754,6 +2880,7 @@ func (s *Store) CreateAgent(ctx context.Context, rec AgentRecord) error {
 	return nil
 }
 
+// GetAgent returns the agent record for the given ID, or nil if not found.
 func (s *Store) GetAgent(ctx context.Context, agentID string) (*AgentRecord, error) {
 	var rec AgentRecord
 	err := s.db.QueryRowContext(ctx, `
@@ -2774,6 +2901,7 @@ func (s *Store) GetAgent(ctx context.Context, agentID string) (*AgentRecord, err
 	return &rec, nil
 }
 
+// ListAgents returns all agent records ordered by creation time.
 func (s *Store) ListAgents(ctx context.Context) ([]AgentRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT agent_id, display_name, provider, model, soul, worker_count,
@@ -2796,9 +2924,13 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentRecord, error) {
 		}
 		out = append(out, rec)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list agents: iterate: %w", err)
+	}
+	return out, nil
 }
 
+// UpdateAgentStatus sets the status field for the given agent (e.g. "active", "stopped").
 func (s *Store) UpdateAgentStatus(ctx context.Context, agentID, status string) error {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE agents SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE agent_id = ?;
@@ -2806,13 +2938,17 @@ func (s *Store) UpdateAgentStatus(ctx context.Context, agentID, status string) e
 	if err != nil {
 		return fmt.Errorf("update agent status: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, rowsErr := res.RowsAffected()
+	if rowsErr != nil {
+		return fmt.Errorf("update agent status: rows affected: %w", rowsErr)
+	}
 	if n == 0 {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
 	return nil
 }
 
+// DeleteAgent removes an agent and its inter-agent messages in a single transaction.
 func (s *Store) DeleteAgent(ctx context.Context, agentID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -2824,7 +2960,10 @@ func (s *Store) DeleteAgent(ctx context.Context, agentID string) error {
 	if err != nil {
 		return fmt.Errorf("delete agent: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, rowsErr := res.RowsAffected()
+	if rowsErr != nil {
+		return fmt.Errorf("delete agent: rows affected: %w", rowsErr)
+	}
 	if n == 0 {
 		return fmt.Errorf("agent %q not found", agentID)
 	}
@@ -2834,20 +2973,33 @@ func (s *Store) DeleteAgent(ctx context.Context, agentID string) error {
 		return fmt.Errorf("delete agent messages: %w", err)
 	}
 
+	// Cancel orphaned tasks (QUEUED or CLAIMED) belonging to the deleted agent.
+	// Running tasks are left to their engine's drain/timeout. Terminal tasks are kept for audit.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE tasks SET status = ?, error = 'agent_deleted', last_error_code = ?,
+			updated_at = CURRENT_TIMESTAMP, lease_owner = NULL, lease_expires_at = NULL
+		WHERE agent_id = ? AND status IN (?, ?);
+	`, TaskStatusCanceled, ReasonCanceled, agentID, TaskStatusQueued, TaskStatusClaimed); err != nil {
+		return fmt.Errorf("cancel orphaned tasks: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("delete agent: commit: %w", err)
 	}
 	return nil
 }
 
+// CreateTaskForAgent creates a new task scoped to the specified agent.
 func (s *Store) CreateTaskForAgent(ctx context.Context, agentID, sessionID, payload string) (string, error) {
 	return s.createTask(ctx, agentID, sessionID, payload)
 }
 
+// ClaimNextPendingTaskForAgent claims the highest-priority pending task for the given agent.
 func (s *Store) ClaimNextPendingTaskForAgent(ctx context.Context, agentID string) (*Task, error) {
 	return s.claimNextPendingTask(ctx, agentID)
 }
 
+// QueueDepthForAgent returns the number of queued tasks for a specific agent.
 func (s *Store) QueueDepthForAgent(ctx context.Context, agentID string) (int, error) {
 	var pending int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM tasks WHERE status=? AND agent_id=?;`, TaskStatusQueued, agentID).Scan(&pending); err != nil {
@@ -2902,24 +3054,25 @@ func (s *Store) ReadAgentMessages(ctx context.Context, agentID string, limit int
 	defer rows.Close()
 
 	var msgs []AgentMessage
-	var ids []string
+	var idArgs []any
 	for rows.Next() {
 		var m AgentMessage
 		if err := rows.Scan(&m.ID, &m.FromAgent, &m.ToAgent, &m.Content, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan agent message: %w", err)
 		}
 		msgs = append(msgs, m)
-		ids = append(ids, strconv.FormatInt(m.ID, 10))
+		idArgs = append(idArgs, m.ID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate agent messages: %w", err)
 	}
 
-	// Mark as read within the same transaction.
-	if len(ids) > 0 {
-		query := fmt.Sprintf(`UPDATE agent_messages SET read_at = CURRENT_TIMESTAMP WHERE id IN (%s);`,
-			strings.Join(ids, ","))
-		if _, err := tx.ExecContext(ctx, query); err != nil {
+	// Mark as read within the same transaction using parameterized query.
+	if len(idArgs) > 0 {
+		placeholders := strings.Repeat("?,", len(idArgs))
+		placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
+		query := `UPDATE agent_messages SET read_at = CURRENT_TIMESTAMP WHERE id IN (` + placeholders + `);`
+		if _, err := tx.ExecContext(ctx, query, idArgs...); err != nil {
 			return nil, fmt.Errorf("mark messages read: %w", err)
 		}
 	}
@@ -2940,4 +3093,125 @@ func (s *Store) PeekAgentMessages(ctx context.Context, agentID string) (int, err
 		return 0, fmt.Errorf("peek agent messages: %w", err)
 	}
 	return count, nil
+}
+
+// TotalAgentMessageCount returns the total number of inter-agent messages (GC-SPEC-OBS-004).
+func (s *Store) TotalAgentMessageCount(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM agent_messages;
+	`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("total agent message count: %w", err)
+	}
+	return count, nil
+}
+
+// TotalDelegationCount returns the total number of delegate_task invocations recorded in the audit log.
+func (s *Store) TotalDelegationCount(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM audit_log WHERE action='tools.delegate_task' AND reason='task_delegated';
+	`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("total delegation count: %w", err)
+	}
+	return count, nil
+}
+
+// IncidentBundle is a bounded run bundle for offline debugging (GC-SPEC-OBS-006).
+type IncidentBundle struct {
+	TaskID     string       `json:"task_id"`
+	Task       *Task        `json:"task"`
+	Events     []TaskEvent  `json:"events"`
+	AuditTrail []AuditEntry `json:"audit_trail"`
+	ConfigHash string       `json:"config_hash"`
+	ExportedAt time.Time    `json:"exported_at"`
+}
+
+// AuditEntry represents a row from the audit_log table.
+type AuditEntry struct {
+	AuditID       int64     `json:"audit_id"`
+	TraceID       string    `json:"trace_id"`
+	Subject       string    `json:"subject"`
+	Action        string    `json:"action"`
+	Decision      string    `json:"decision"`
+	Reason        string    `json:"reason"`
+	PolicyVersion string    `json:"policy_version"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ExportIncident bundles task events + redacted audit entries + config hash
+// for a given task into an IncidentBundle (GC-SPEC-OBS-006).
+func (s *Store) ExportIncident(ctx context.Context, taskID, configHash string) (*IncidentBundle, error) {
+	task, err := s.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("export incident: get task: %w", err)
+	}
+
+	// Fetch all task events for this task.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT event_id, task_id, session_id, event_type,
+			COALESCE(run_id, ''), COALESCE(trace_id, session_id),
+			COALESCE(state_from, ''), COALESCE(state_to, ''), COALESCE(payload_json, ''), created_at
+		FROM task_events
+		WHERE task_id = ?
+		ORDER BY event_id ASC
+		LIMIT 1000;
+	`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("export incident: list events: %w", err)
+	}
+	defer rows.Close()
+	var events []TaskEvent
+	for rows.Next() {
+		var ev TaskEvent
+		if err := rows.Scan(&ev.EventID, &ev.TaskID, &ev.SessionID, &ev.EventType,
+			&ev.RunID, &ev.TraceID, &ev.StateFrom, &ev.StateTo, &ev.Payload, &ev.CreatedAt); err != nil {
+			return nil, fmt.Errorf("export incident: scan event: %w", err)
+		}
+		events = append(events, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("export incident: rows: %w", err)
+	}
+
+	// Collect unique trace IDs from the events to query related audit entries.
+	traceIDs := make(map[string]struct{})
+	for _, ev := range events {
+		if ev.TraceID != "" {
+			traceIDs[ev.TraceID] = struct{}{}
+		}
+	}
+
+	var auditTrail []AuditEntry
+	for tid := range traceIDs {
+		aRows, err := s.db.QueryContext(ctx, `
+			SELECT audit_id, COALESCE(trace_id, ''), COALESCE(subject, ''),
+				action, decision, COALESCE(reason, ''), COALESCE(policy_version, ''), created_at
+			FROM audit_log
+			WHERE trace_id = ?
+			ORDER BY audit_id ASC
+			LIMIT 200;
+		`, tid)
+		if err != nil {
+			continue
+		}
+		for aRows.Next() {
+			var ae AuditEntry
+			if err := aRows.Scan(&ae.AuditID, &ae.TraceID, &ae.Subject,
+				&ae.Action, &ae.Decision, &ae.Reason, &ae.PolicyVersion, &ae.CreatedAt); err != nil {
+				continue
+			}
+			auditTrail = append(auditTrail, ae)
+		}
+		aRows.Close()
+	}
+
+	return &IncidentBundle{
+		TaskID:     taskID,
+		Task:       task,
+		Events:     events,
+		AuditTrail: auditTrail,
+		ConfigHash: configHash,
+		ExportedAt: time.Now().UTC(),
+	}, nil
 }

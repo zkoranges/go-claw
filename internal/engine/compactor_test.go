@@ -46,7 +46,7 @@ func TestCompactor_CompactIfNeeded(t *testing.T) {
 
 	// Helper to add messages
 	addMsg := func(role, content string, tokens int) {
-		if err := store.AddHistory(ctx, sessionID, role, content, tokens); err != nil {
+		if err := store.AddHistory(ctx, sessionID, "default", role, content, tokens); err != nil {
 			t.Fatalf("add history: %v", err)
 		}
 	}
@@ -62,7 +62,7 @@ func TestCompactor_CompactIfNeeded(t *testing.T) {
 		KeepRecent:     2,
 	})
 
-	history, err := compactor.CompactIfNeeded(ctx, sessionID)
+	history, err := compactor.CompactIfNeeded(ctx, sessionID, "default")
 	if err != nil {
 		t.Fatalf("CompactIfNeeded error: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCompactor_CompactIfNeeded(t *testing.T) {
 		return "This is a summary of the past.", nil
 	}
 
-	history, err = compactor.CompactIfNeeded(ctx, sessionID)
+	history, err = compactor.CompactIfNeeded(ctx, sessionID, "default")
 	if err != nil {
 		t.Fatalf("CompactIfNeeded error: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestCompactor_LLMFailure(t *testing.T) {
 
 	// Add enough to trigger compaction
 	for i := 0; i < 20; i++ {
-		store.AddHistory(ctx, sessionID, "user", "msg", 10000)
+		store.AddHistory(ctx, sessionID, "default", "user", "msg", 10000)
 	}
 
 	mockBrain := &MockBrain{
@@ -186,7 +186,7 @@ func TestCompactor_LLMFailure(t *testing.T) {
 	}
 	compactor := NewCompactor(store, mockBrain, "openai", "gpt-4o", CompactorConfig{ThresholdRatio: 0.1}) // Low threshold
 
-	history, err := compactor.CompactIfNeeded(ctx, sessionID)
+	history, err := compactor.CompactIfNeeded(ctx, sessionID, "default")
 	if err != nil {
 		t.Fatalf("CompactIfNeeded should not fail on LLM error: %v", err)
 	}
