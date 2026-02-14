@@ -8,10 +8,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/basket/go-claw/internal/persistence"
-	"github.com/basket/go-claw/internal/policy"
 )
+
+// mockChatTaskRouter implements ChatTaskRouter for testing.
+type mockChatTaskRouter struct {
+	lastAgentID   string
+	lastSessionID string
+	lastContent   string
+	taskID        string
+	err           error
+}
+
+func (m *mockChatTaskRouter) CreateChatTask(_ context.Context, agentID, sessionID, content string) (string, error) {
+	m.lastAgentID = agentID
+	m.lastSessionID = sessionID
+	m.lastContent = content
+	return m.taskID, m.err
+}
 
 func TestHeartbeatManager_RunOnce(t *testing.T) {
 	// Setup temp home
@@ -27,26 +40,12 @@ func TestHeartbeatManager_RunOnce(t *testing.T) {
 		t.Fatalf("write heartbeat: %v", err)
 	}
 
-	// Setup DB
-	dbPath := filepath.Join(homeDir, "test.db")
-	store, err := persistence.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer store.Close()
-
-	// Setup Engine (Mock proc)
-	mockProc := &MockProcessor{}
-	eng := New(store, mockProc, Config{WorkerCount: 1}, policy.Default())
+	// Setup mock router
+	router := &mockChatTaskRouter{taskID: "test-task-id"}
 
 	// Create manager
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	mgr := NewHeartbeatManager(eng, store, homeDir, 1, logger)
-
-	// Ensure session (normally done in Start, but we call runOnce directly)
-	if err := store.EnsureSession(context.Background(), HeartbeatSessionID); err != nil {
-		t.Fatalf("ensure session: %v", err)
-	}
+	mgr := NewHeartbeatManager(router, nil, homeDir, 1, logger)
 
 	// Run Once
 	ctx := context.Background()
@@ -54,32 +53,30 @@ func TestHeartbeatManager_RunOnce(t *testing.T) {
 		t.Fatalf("runOnce failed: %v", err)
 	}
 
-	// Verify task created
-	pending, _, err := store.TaskCounts(ctx)
-	if err != nil {
-		t.Fatalf("task counts: %v", err)
+	// Verify router was called with correct args
+	if router.lastAgentID != "default" {
+		t.Errorf("expected agent_id 'default', got %q", router.lastAgentID)
 	}
-	if pending != 1 {
-		t.Errorf("expected 1 pending task, got %d", pending)
+	if router.lastSessionID != HeartbeatSessionID {
+		t.Errorf("expected session_id %q, got %q", HeartbeatSessionID, router.lastSessionID)
 	}
-
-	// Verify content
-	task, err := store.ClaimNextPendingTask(ctx)
-	if err != nil {
-		t.Fatalf("claim task: %v", err)
-	}
-	if task == nil {
-		t.Fatal("expected task to be claimable")
-	}
-
-	if !strings.Contains(task.Payload, hbContent) {
-		t.Errorf("task payload missing heartbeat content: %s", task.Payload)
+	if !strings.Contains(router.lastContent, hbContent) {
+		t.Errorf("expected content to contain heartbeat checklist, got %q", router.lastContent)
 	}
 }
 
-// MockProcessor for testing
-type MockProcessor struct{}
+func TestHeartbeatManager_RunOnce_NoFile(t *testing.T) {
+	homeDir := t.TempDir()
+	// workspace/HEARTBEAT.md does NOT exist
 
-func (m *MockProcessor) Process(ctx context.Context, task persistence.Task) (string, error) {
-	return "processed", nil
+	router := &mockChatTaskRouter{taskID: "should-not-be-called"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := NewHeartbeatManager(router, nil, homeDir, 1, logger)
+
+	if err := mgr.runOnce(context.Background()); err != nil {
+		t.Fatalf("runOnce with missing file should succeed silently, got: %v", err)
+	}
+	if router.lastAgentID != "" {
+		t.Error("router should not have been called when HEARTBEAT.md is missing")
+	}
 }

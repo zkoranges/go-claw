@@ -61,13 +61,16 @@ internal/
 - **Engine** uses variadic policy: `engine.New(store, proc, cfg, pol ...policy.Checker)`
 - **Brain** routes through Genkit with tool-call fallback on LLM failure
 - **WASM sandbox** via wazero v1.11: `WithMemoryLimitPages(pages)`, `WithCloseOnContextDone(true)`
+- **ChatTaskRouter interface** (`engine.ChatTaskRouter`): decouples task creation from the `agent` package. `*agent.Registry` satisfies it. Used by heartbeat and Telegram to route tasks without creating an `engine` → `agent` import cycle
+- **Multi-agent routing**: Telegram supports `@agentid message` prefix to target a specific agent. TUI supports `/agent` to list agents and `/agent <id>` to switch. Both route through `ChatTaskRouter`
+- **Agent hot-reload**: editing `config.yaml` agents section triggers `reconcileAgents()` in main.go — adds new agents, removes deleted ones, and recreates changed ones. The `OnAgentCreated` hook auto-provisions skills, MCP tools, and shell executor on new agents
 
 ## Environment
 
 - `GOCLAW_HOME` — data directory (default `~/.goclaw`). Contains db, config, logs, skills, policy
 - `GEMINI_API_KEY` — required for brain (Genkit + Gemini)
 - `GOCLAW_NO_TUI=1` — headless mode (no Bubbletea TUI)
-- Config file: `${GOCLAW_HOME}/config.yaml` (YAML with env var overlay)
+- Config file: `${GOCLAW_HOME}/config.yaml` (YAML with env var overlay, agents section hot-reloads via fsnotify)
 - Policy file: `${GOCLAW_HOME}/policy.yaml`
 - Daemon listens on `127.0.0.1:18789`
 
@@ -87,6 +90,7 @@ internal/
 - **json.Unmarshal**: does NOT clear struct fields absent from JSON — use fresh struct per read
 - **coder/websocket**: context cancellation poisons TCP connection deadlines
 - **Schema version**: currently v6 (`schemaVersionV6`, checksum `gc-v6-2026-02-14-multi-agent`). Update both constant and checksum when adding migrations
+- **Brain nil guard**: `RegisterTestAgent` creates `RunningAgent` with `Brain: nil`. Any loop over `ListRunningAgents()` that calls Brain methods must guard with `if ra.Brain != nil`
 
 ## Code Style
 

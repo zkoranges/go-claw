@@ -309,7 +309,9 @@ The system runs this checklist periodically to ensure health.
 		} else {
 			shellSandbox = sb
 			for _, ra := range registry.ListRunningAgents() {
-				ra.Brain.Registry().ShellExecutor = shellSandbox
+				if ra.Brain != nil {
+					ra.Brain.Registry().ShellExecutor = shellSandbox
+				}
 			}
 			defer shellSandbox.Close()
 			logger.Info("shell sandbox enabled", "image", cfg.Tools.Shell.SandboxImage)
@@ -336,7 +338,7 @@ The system runs this checklist periodically to ensure health.
 
 	// Register MCP tools on all agents.
 	for _, ra := range registry.ListRunningAgents() {
-		if ra.Brain.Genkit() != nil {
+		if ra.Brain != nil && ra.Brain.Genkit() != nil {
 			mcpTools := tools.RegisterMCPTools(ra.Brain.Genkit(), ra.Brain.Registry(), mcpManager)
 			if len(mcpTools) > 0 {
 				ra.Brain.Registry().Tools = append(ra.Brain.Registry().Tools, mcpTools...)
@@ -353,7 +355,9 @@ The system runs this checklist periodically to ensure health.
 		reloadMu.Lock()
 		defer reloadMu.Unlock()
 		for _, ra := range registry.ListRunningAgents() {
-			ra.Brain.RegisterSkill(name)
+			if ra.Brain != nil {
+				ra.Brain.RegisterSkill(name)
+			}
 		}
 		logger.Info("skill registered in all agents", "skill", name)
 	})
@@ -503,7 +507,9 @@ The system runs this checklist periodically to ensure health.
 		skillsState.mu.Unlock()
 
 		for _, ra := range registry.ListRunningAgents() {
-			ra.Brain.ReplaceLoadedSkills(loaded)
+			if ra.Brain != nil {
+				ra.Brain.ReplaceLoadedSkills(loaded)
+			}
 		}
 
 		// Register eligible WASM modules found under SKILL.md skill directories.
@@ -527,7 +533,9 @@ The system runs this checklist periodically to ensure health.
 					continue
 				}
 				for _, ra := range registry.ListRunningAgents() {
-					ra.Brain.RegisterSkill(name)
+					if ra.Brain != nil {
+						ra.Brain.RegisterSkill(name)
+					}
 				}
 			}
 		}
@@ -539,6 +547,11 @@ The system runs this checklist periodically to ensure health.
 	// C1 FIX: Register provisioning hook so runtime-created agents (via agent.create RPC)
 	// receive skills, MCP tools, and shell executor — matching what startup agents get.
 	registry.SetOnAgentCreated(func(ra *agent.RunningAgent) {
+		if ra.Brain == nil {
+			logger.Info("runtime agent has nil brain, skipping provisioning", "agent_id", ra.Config.AgentID)
+			return
+		}
+
 		// Load current skills snapshot.
 		skillsState.mu.RLock()
 		loaded := append([]skills.LoadedSkill(nil), skillsState.loaded...)
@@ -625,6 +638,15 @@ The system runs this checklist periodically to ensure health.
 					_ = store.RecordPolicyVersion(context.Background(), newVer, newVer, ev.Path)
 					logger.Info("policy.yaml hot-reloaded", "policy_version", newVer)
 				}
+			case "config.yaml":
+				newCfg, err := config.Load()
+				if err != nil {
+					logger.Error("failed to reload config.yaml", "error", err)
+					break
+				}
+				reconcileAgents(ctx, registry, newCfg.Agents, cfg.Agents, cfg.HomeDir, logger)
+				cfg.Agents = newCfg.Agents
+				logger.Info("config.yaml agents hot-reloaded")
 			}
 		}
 	}()
@@ -789,7 +811,7 @@ The system runs this checklist periodically to ensure health.
 	defer cronSched.Stop()
 
 	// Heartbeat system
-	heartbeat := engine.NewHeartbeatManager(defaultAgent.Engine, store, cfg.HomeDir, cfg.HeartbeatIntervalMinutes, logger)
+	heartbeat := engine.NewHeartbeatManager(registry, store, cfg.HomeDir, cfg.HeartbeatIntervalMinutes, logger)
 	heartbeat.Start(ctx)
 
 	// Channels
@@ -800,7 +822,7 @@ The system runs this checklist periodically to ensure health.
 			tg := channels.NewTelegramChannel(
 				cfg.Channels.Telegram.Token,
 				cfg.Channels.Telegram.AllowedIDs,
-				defaultAgent.Engine,
+				registry,
 				store,
 				logger,
 				eventBus,
@@ -853,16 +875,18 @@ The system runs this checklist periodically to ensure health.
 		// Run the chat REPL. When it exits, cancel the context to shut down.
 		go func() {
 			if err := tui.RunChat(ctx, tui.ChatConfig{
-				Brain:      defaultAgent.Brain,
-				Store:      store,
-				Policy:     pol,
-				ModelName:  cfg.GeminiModel,
-				HomeDir:    cfg.HomeDir,
-				Cfg:        &cfg,
-				CancelFunc: stop,
-				Providers:  defaultAgent.Brain.Providers(),
-				AgentName:  cfg.AgentName,
-				AgentEmoji: cfg.AgentEmoji,
+				Brain:        defaultAgent.Brain,
+				Store:        store,
+				Policy:       pol,
+				ModelName:    cfg.GeminiModel,
+				HomeDir:      cfg.HomeDir,
+				Cfg:          &cfg,
+				CancelFunc:   stop,
+				Providers:    defaultAgent.Brain.Providers(),
+				AgentName:    cfg.AgentName,
+				AgentEmoji:   cfg.AgentEmoji,
+				Switcher:     &tuiAgentSwitcher{reg: registry},
+				CurrentAgent: "default",
 			}); err != nil && ctx.Err() == nil {
 				logger.Error("chat exited with error", "error", err)
 			}
@@ -890,6 +914,109 @@ The system runs this checklist periodically to ensure health.
 	registry.DrainAll(drainTimeout)
 	// 3. Flush events + close DB handled by deferred store.Close().
 	logger.Info("shutdown complete")
+}
+
+// reconcileAgents reconciles the running agents with the new config.yaml agents section.
+func reconcileAgents(ctx context.Context, reg *agent.Registry,
+	newAgents, oldAgents []config.AgentConfigEntry, homeDir string, logger *slog.Logger) {
+	newMap := make(map[string]config.AgentConfigEntry)
+	for _, a := range newAgents {
+		newMap[a.AgentID] = a
+	}
+	oldMap := make(map[string]config.AgentConfigEntry)
+	for _, a := range oldAgents {
+		oldMap[a.AgentID] = a
+	}
+
+	// Remove agents no longer in config (skip "default").
+	for id := range oldMap {
+		if _, still := newMap[id]; !still && id != "default" {
+			if err := reg.RemoveAgent(ctx, id, 5*time.Second); err != nil {
+				logger.Warn("failed to remove agent during reconcile", "agent_id", id, "error", err)
+			}
+		}
+	}
+	// Add new agents.
+	for id, acfg := range newMap {
+		if _, existed := oldMap[id]; !existed {
+			if err := reg.CreateAgent(ctx, buildAgentConfig(acfg, homeDir)); err != nil {
+				logger.Warn("failed to create agent during reconcile", "agent_id", id, "error", err)
+			}
+		}
+	}
+	// Changed agents: remove + re-create (skip "default").
+	for id, acfg := range newMap {
+		if old, existed := oldMap[id]; existed && !agentConfigEqual(acfg, old) && id != "default" {
+			if err := reg.RemoveAgent(ctx, id, 5*time.Second); err != nil {
+				logger.Warn("failed to remove changed agent during reconcile", "agent_id", id, "error", err)
+			}
+			if err := reg.CreateAgent(ctx, buildAgentConfig(acfg, homeDir)); err != nil {
+				logger.Warn("failed to re-create changed agent during reconcile", "agent_id", id, "error", err)
+			}
+		}
+	}
+}
+
+// buildAgentConfig constructs an agent.AgentConfig from config.AgentConfigEntry.
+func buildAgentConfig(acfg config.AgentConfigEntry, homeDir string) agent.AgentConfig {
+	apiKey := os.Getenv(acfg.APIKeyEnv)
+	soul := acfg.Soul
+	if acfg.SoulFile != "" {
+		if data, err := os.ReadFile(filepath.Join(homeDir, acfg.SoulFile)); err == nil {
+			soul = string(data)
+		}
+	}
+	return agent.AgentConfig{
+		AgentID:            acfg.AgentID,
+		DisplayName:        acfg.DisplayName,
+		Provider:           acfg.Provider,
+		Model:              acfg.Model,
+		APIKey:             apiKey,
+		APIKeyEnv:          acfg.APIKeyEnv,
+		Soul:               soul,
+		WorkerCount:        acfg.WorkerCount,
+		TaskTimeoutSeconds: acfg.TaskTimeoutSeconds,
+		MaxQueueDepth:      acfg.MaxQueueDepth,
+		SkillsFilter:       acfg.SkillsFilter,
+		PreferredSearch:    acfg.PreferredSearch,
+	}
+}
+
+// agentConfigEqual compares two AgentConfigEntry values for equality.
+func agentConfigEqual(a, b config.AgentConfigEntry) bool {
+	return a.AgentID == b.AgentID &&
+		a.DisplayName == b.DisplayName &&
+		a.Provider == b.Provider &&
+		a.Model == b.Model &&
+		a.APIKeyEnv == b.APIKeyEnv &&
+		a.Soul == b.Soul &&
+		a.SoulFile == b.SoulFile &&
+		a.WorkerCount == b.WorkerCount &&
+		a.TaskTimeoutSeconds == b.TaskTimeoutSeconds &&
+		a.MaxQueueDepth == b.MaxQueueDepth &&
+		a.PreferredSearch == b.PreferredSearch
+}
+
+// tuiAgentSwitcher adapts agent.Registry for the tui.AgentSwitcher interface.
+type tuiAgentSwitcher struct {
+	reg *agent.Registry
+}
+
+func (s *tuiAgentSwitcher) SwitchAgent(id string) (engine.Brain, string, string, error) {
+	ra := s.reg.GetAgent(id)
+	if ra == nil {
+		return nil, "", "", fmt.Errorf("agent %q not found", id)
+	}
+	return ra.Brain, ra.Config.DisplayName, ra.Config.AgentEmoji, nil
+}
+
+func (s *tuiAgentSwitcher) ListAgentIDs() []string {
+	configs := s.reg.ListAgents()
+	ids := make([]string, len(configs))
+	for i, c := range configs {
+		ids[i] = c.AgentID
+	}
+	return ids
 }
 
 func fatalStartup(logger *slog.Logger, reasonCode string, err error) {

@@ -197,13 +197,19 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				var buf bytes.Buffer
-				shouldExit := handleCommand(line, m.cc, m.sessionID, &buf)
+				shouldExit := handleCommand(line, &m.cc, m.sessionID, &buf)
 				out := strings.TrimSpace(buf.String())
 				if out != "" {
 					m.history = append(m.history, chatEntry{role: chatRoleSystem, text: out})
 				}
 				if shouldExit {
 					return m, tea.Quit
+				}
+				// Update agentPrefix if agent was switched via /agent command.
+				if m.cc.AgentName != "" && m.cc.AgentEmoji != "" {
+					m.agentPrefix = fmt.Sprintf("%s %s", m.cc.AgentEmoji, m.cc.AgentName)
+				} else if m.cc.AgentName != "" {
+					m.agentPrefix = m.cc.AgentName
 				}
 				return m, nil
 			}

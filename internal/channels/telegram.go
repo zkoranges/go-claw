@@ -12,7 +12,6 @@ import (
 	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/engine"
 	"github.com/basket/go-claw/internal/persistence"
-	"github.com/basket/go-claw/internal/tokenutil"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -20,7 +19,7 @@ import (
 type TelegramChannel struct {
 	token      string
 	allowedIDs map[int64]struct{}
-	engine     *engine.Engine
+	router     engine.ChatTaskRouter
 	store      *persistence.Store
 	logger     *slog.Logger
 	bot        *tgbotapi.BotAPI
@@ -31,7 +30,7 @@ type TelegramChannel struct {
 }
 
 // NewTelegramChannel creates a new Telegram channel.
-func NewTelegramChannel(token string, allowedIDs []int64, eng *engine.Engine, store *persistence.Store, logger *slog.Logger, eventBus ...*bus.Bus) *TelegramChannel {
+func NewTelegramChannel(token string, allowedIDs []int64, router engine.ChatTaskRouter, store *persistence.Store, logger *slog.Logger, eventBus ...*bus.Bus) *TelegramChannel {
 	allowed := make(map[int64]struct{})
 	for _, id := range allowedIDs {
 		allowed[id] = struct{}{}
@@ -43,7 +42,7 @@ func NewTelegramChannel(token string, allowedIDs []int64, eng *engine.Engine, st
 	return &TelegramChannel{
 		token:        token,
 		allowedIDs:   allowed,
-		engine:       eng,
+		router:       router,
 		store:        store,
 		logger:       logger,
 		eventBus:     eb,
@@ -93,30 +92,31 @@ func (t *TelegramChannel) Start(ctx context.Context) error {
 }
 
 func (t *TelegramChannel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
-	prompt := strings.TrimSpace(msg.Text)
-	if prompt == "" {
+	content := strings.TrimSpace(msg.Text)
+	if content == "" {
+		return
+	}
+
+	// Parse @agent prefix for agent routing.
+	agentID := "default"
+	if strings.HasPrefix(content, "@") {
+		parts := strings.SplitN(content, " ", 2)
+		agentID = strings.TrimPrefix(parts[0], "@")
+		if len(parts) > 1 {
+			content = strings.TrimSpace(parts[1])
+		} else {
+			content = ""
+		}
+	}
+	if content == "" {
 		return
 	}
 
 	// Map Telegram user ID to a persistent session ID
-	// session ID = telegram-{user_id}
 	sessionID := fmt.Sprintf("telegram-%d", msg.From.ID)
 
-	// Ensure session exists
-	if err := t.store.EnsureSession(ctx, sessionID); err != nil {
-		t.logger.Error("failed to ensure telegram session", "error", err)
-		t.reply(msg.Chat.ID, "Error: internal session failure.")
-		return
-	}
-
-	// Save user message to history
-	if err := t.store.AddHistory(ctx, sessionID, "user", prompt, tokenutil.EstimateTokens(prompt)); err != nil {
-		t.logger.Error("failed to save telegram history", "error", err)
-	}
-
-	// Create task
-	taskPayload := fmt.Sprintf(`{"prompt": %q}`, prompt)
-	taskID, err := t.store.CreateTask(ctx, sessionID, taskPayload)
+	// Route through ChatTaskRouter (handles session, history, task creation).
+	taskID, err := t.router.CreateChatTask(ctx, agentID, sessionID, content)
 	if err != nil {
 		t.logger.Error("failed to create telegram task", "error", err)
 		t.reply(msg.Chat.ID, "Error: could not schedule task.")
@@ -129,7 +129,6 @@ func (t *TelegramChannel) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 	t.pendingMu.Unlock()
 
 	// We use the KV store to keep track of which task belongs to which chat/message
-	// Key: task_reply:{taskID} -> {chatID}
 	kvKey := fmt.Sprintf("task_reply:%s", taskID)
 	kvVal := fmt.Sprintf("%d", msg.Chat.ID)
 	if err := t.store.KVSet(ctx, kvKey, kvVal); err != nil {

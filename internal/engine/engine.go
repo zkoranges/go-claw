@@ -30,6 +30,13 @@ type Processor interface {
 	Process(ctx context.Context, task persistence.Task) (string, error)
 }
 
+// ChatTaskRouter routes chat tasks to the appropriate agent. Implemented by
+// agent.Registry to decouple packages that need to create tasks (heartbeat,
+// channels) from the agent package (which would cause an import cycle).
+type ChatTaskRouter interface {
+	CreateChatTask(ctx context.Context, agentID, sessionID, content string) (string, error)
+}
+
 type EchoProcessor struct {
 	Brain Brain
 }

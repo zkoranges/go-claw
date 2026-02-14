@@ -16,7 +16,7 @@ const HeartbeatSessionID = "00000000-0000-0000-0000-000000000000" // Reserved se
 
 // HeartbeatManager manages periodic system checks.
 type HeartbeatManager struct {
-	engine   *Engine
+	router   ChatTaskRouter
 	store    *persistence.Store
 	homeDir  string
 	interval time.Duration
@@ -24,12 +24,12 @@ type HeartbeatManager struct {
 }
 
 // NewHeartbeatManager creates a new HeartbeatManager.
-func NewHeartbeatManager(eng *Engine, store *persistence.Store, homeDir string, intervalMinutes int, logger *slog.Logger) *HeartbeatManager {
+func NewHeartbeatManager(router ChatTaskRouter, store *persistence.Store, homeDir string, intervalMinutes int, logger *slog.Logger) *HeartbeatManager {
 	if intervalMinutes <= 0 {
 		intervalMinutes = 30
 	}
 	return &HeartbeatManager{
-		engine:   eng,
+		router:   router,
 		store:    store,
 		homeDir:  homeDir,
 		interval: time.Duration(intervalMinutes) * time.Minute,
@@ -50,9 +50,6 @@ func (h *HeartbeatManager) Start(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(h.interval)
 		defer ticker.Stop()
-
-		// Run once immediately on startup? No, let's wait for first tick or maybe run after a short delay.
-		// Let's wait for tick to avoid storming startup.
 
 		for {
 			select {
@@ -89,7 +86,7 @@ func (h *HeartbeatManager) runOnce(ctx context.Context) error {
 
 	prompt := fmt.Sprintf("Periodic System Review.\n\nPlease review the current system status against the following heartbeat checklist:\n\n%s\n\nIf you find any issues, report them. If everything is normal, confirm the system status is healthy.", content)
 
-	taskID, err := h.engine.CreateChatTask(ctx, HeartbeatSessionID, prompt)
+	taskID, err := h.router.CreateChatTask(ctx, "default", HeartbeatSessionID, prompt)
 	if err != nil {
 		return fmt.Errorf("create heartbeat task: %w", err)
 	}
@@ -97,7 +94,9 @@ func (h *HeartbeatManager) runOnce(ctx context.Context) error {
 	h.logger.Info("heartbeat task scheduled", "task_id", taskID)
 
 	// Poll for task completion to capture results.
-	go h.awaitResult(ctx, taskID)
+	if h.store != nil {
+		go h.awaitResult(ctx, taskID)
+	}
 	return nil
 }
 

@@ -15,18 +15,27 @@ import (
 	"github.com/basket/go-claw/internal/tools"
 )
 
+// AgentSwitcher allows the TUI to list and switch between agents.
+// Implemented in main.go to avoid importing the agent package here.
+type AgentSwitcher interface {
+	SwitchAgent(agentID string) (brain engine.Brain, name, emoji string, err error)
+	ListAgentIDs() []string
+}
+
 // ChatConfig holds the dependencies for the chat REPL.
 type ChatConfig struct {
-	Brain      engine.Brain
-	Store      *persistence.Store
-	Policy     *policy.LivePolicy
-	ModelName  string
-	HomeDir    string
-	Cfg        *config.Config
-	CancelFunc context.CancelFunc
-	Providers  []tools.SearchProvider
-	AgentName  string
-	AgentEmoji string
+	Brain        engine.Brain
+	Store        *persistence.Store
+	Policy       *policy.LivePolicy
+	ModelName    string
+	HomeDir      string
+	Cfg          *config.Config
+	CancelFunc   context.CancelFunc
+	Providers    []tools.SearchProvider
+	AgentName    string
+	AgentEmoji   string
+	Switcher     AgentSwitcher // nil = single agent mode (backward compat)
+	CurrentAgent string
 }
 
 // RunChat runs an interactive chat UI on stdin/stdout.
@@ -57,7 +66,7 @@ func RunChat(ctx context.Context, cc ChatConfig) error {
 }
 
 // handleCommand processes a slash command. Returns true if the chat should exit.
-func handleCommand(line string, cc ChatConfig, sessionID string, out io.Writer) bool {
+func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer) bool {
 	parts := strings.SplitN(line, " ", 2)
 	cmd := strings.ToLower(parts[0])
 	// Common typo/alias.
@@ -77,6 +86,8 @@ func handleCommand(line string, cc ChatConfig, sessionID string, out io.Writer) 
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "  Commands:")
 		fmt.Fprintln(out, "    /help                        Show this help message")
+		fmt.Fprintln(out, "    /agent                       List agents (current marked with *)")
+		fmt.Fprintln(out, "    /agent <id>                  Switch to a different agent")
 		fmt.Fprintln(out, "    /skills                      List all skills with live status")
 		fmt.Fprintln(out, "    /skills setup <name>         Auto-configure a skill")
 		fmt.Fprintln(out, "    /allow <domain>              Allow a domain for web access (e.g. /allow reddit.com)")
@@ -128,6 +139,9 @@ func handleCommand(line string, cc ChatConfig, sessionID string, out io.Writer) 
 	case "/session":
 		fmt.Fprintf(out, "  Session: %s\n\n", sessionID)
 
+	case "/agent":
+		handleAgentCommand(arg, cc, out)
+
 	case "/skills":
 		handleSkillsCommand(arg, cc, out)
 
@@ -145,7 +159,7 @@ func handleCommand(line string, cc ChatConfig, sessionID string, out io.Writer) 
 }
 
 // handleSkillsCommand processes /skills and /skills setup <name>.
-func handleSkillsCommand(arg string, cc ChatConfig, out io.Writer) {
+func handleSkillsCommand(arg string, cc *ChatConfig, out io.Writer) {
 	catalog := tools.FullCatalog(cc.Providers)
 	apiKeys := make(map[string]string)
 	if cc.Cfg != nil {
@@ -307,7 +321,7 @@ func isMissing(missing []string, needle string) bool {
 	return false
 }
 
-func handleSkillSetup(name string, catalog []tools.SkillInfo, apiKeys map[string]string, cc ChatConfig, out io.Writer) {
+func handleSkillSetup(name string, catalog []tools.SkillInfo, apiKeys map[string]string, cc *ChatConfig, out io.Writer) {
 	var info *tools.SkillInfo
 	for i := range catalog {
 		if strings.EqualFold(catalog[i].Name, name) {
@@ -385,8 +399,45 @@ func handleSkillSetup(name string, catalog []tools.SkillInfo, apiKeys map[string
 	fmt.Fprintln(out)
 }
 
+// handleAgentCommand processes /agent sub-commands.
+func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
+	if cc.Switcher == nil {
+		fmt.Fprintln(out, "  Multi-agent not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	if arg == "" {
+		// List all agents, mark current with *.
+		ids := cc.Switcher.ListAgentIDs()
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  Agents:")
+		for _, id := range ids {
+			marker := "  "
+			if id == cc.CurrentAgent {
+				marker = "* "
+			}
+			fmt.Fprintf(out, "    %s%s\n", marker, id)
+		}
+		fmt.Fprintln(out)
+		return
+	}
+
+	// Switch to specified agent.
+	brain, name, emoji, err := cc.Switcher.SwitchAgent(arg)
+	if err != nil {
+		fmt.Fprintf(out, "  Error: %v\n\n", err)
+		return
+	}
+	cc.Brain = brain
+	cc.AgentName = name
+	cc.AgentEmoji = emoji
+	cc.CurrentAgent = arg
+	fmt.Fprintf(out, "  Switched to agent: %s\n\n", arg)
+}
+
 // handleModelCommand processes /model sub-commands.
-func handleModelCommand(arg string, cc ChatConfig, out io.Writer) {
+func handleModelCommand(arg string, cc *ChatConfig, out io.Writer) {
 	current := "gemini-2.5-flash"
 	if cc.Cfg != nil && cc.Cfg.GeminiModel != "" {
 		current = cc.Cfg.GeminiModel
@@ -549,7 +600,7 @@ func handleModelCommand(arg string, cc ChatConfig, out io.Writer) {
 }
 
 // handleConfigCommand processes /config sub-commands.
-func handleConfigCommand(arg string, cc ChatConfig, out io.Writer) {
+func handleConfigCommand(arg string, cc *ChatConfig, out io.Writer) {
 	parts := strings.SplitN(arg, " ", 3)
 	sub := ""
 	if len(parts) > 0 {

@@ -31,7 +31,7 @@ func TestDeleteWordLeft_SkipsSpacesThenWord(t *testing.T) {
 func TestHandleCommand_HelpWritesOutput(t *testing.T) {
 	var buf bytes.Buffer
 	cc := ChatConfig{}
-	shouldExit := handleCommand("/help", cc, "sess", &buf)
+	shouldExit := handleCommand("/help", &cc, "sess", &buf)
 	if shouldExit {
 		t.Fatalf("expected shouldExit=false")
 	}

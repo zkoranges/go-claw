@@ -10,7 +10,7 @@ import (
 var _ channels.Channel = (*channels.TelegramChannel)(nil)
 
 func TestTelegramChannel_Name(t *testing.T) {
-	// NewTelegramChannel requires non-nil engine and store for real use, but
+	// NewTelegramChannel requires non-nil router and store for real use, but
 	// the Name() method only returns a constant and does not touch any
 	// dependencies, so we can construct a minimal instance with nil deps.
 	ch := channels.NewTelegramChannel("fake-token", nil, nil, nil, nil)
