@@ -3800,9 +3800,11 @@ type PlanExecution struct {
 	Status         string
 	TotalSteps     int
 	CompletedSteps int
+	CurrentWave    int
 	TotalCostUSD   float64
 	CreatedAt      time.Time
 	CompletedAt    *time.Time
+	UpdatedAt      *time.Time
 }
 
 // CreatePlanExecution records the start of a plan execution.
@@ -3885,6 +3887,129 @@ func (s *Store) CompletePlanExecution(ctx context.Context, id, status string, to
 	return nil
 }
 
+// InitializePlanSteps creates step records for all steps in a plan execution.
+// GC-SPEC-PDR-v4-Phase-2: Step persistence initialization.
+func (s *Store) InitializePlanSteps(ctx context.Context, execID string, steps []PlanExecutionStep) error {
+	if len(steps) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO plan_execution_steps
+		(id, execution_id, step_id, step_index, wave_number, agent_id, prompt, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare statement: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+
+	for _, step := range steps {
+		stepRecordID := uuid.New().String()
+		_, err := stmt.ExecContext(ctx,
+			stepRecordID, execID, step.StepID, step.StepIndex, step.WaveNumber,
+			step.AgentID, step.Prompt,
+		)
+		if err != nil {
+			return fmt.Errorf("insert step: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	return nil
+}
+
+// UpdatePlanWave updates the current wave number after wave completion.
+// GC-SPEC-PDR-v4-Phase-2: Wave tracking for resumption.
+func (s *Store) UpdatePlanWave(ctx context.Context, execID string, waveNum int) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE plan_executions
+		SET current_wave = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`,
+		waveNum, execID,
+	)
+	if err != nil {
+		return fmt.Errorf("update wave: %w", err)
+	}
+	return nil
+}
+
+// GetPlanExecution retrieves a plan execution for hydration during resumption.
+// GC-SPEC-PDR-v4-Phase-3: Plan state recovery.
+func (s *Store) GetPlanExecution(ctx context.Context, execID string) (*PlanExecution, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, plan_name, session_id, status, total_steps, completed_steps, current_wave,
+		       total_cost_usd, created_at, completed_at, updated_at
+		FROM plan_executions
+		WHERE id = ?`,
+		execID,
+	)
+
+	var exec PlanExecution
+	err := row.Scan(
+		&exec.ID, &exec.PlanName, &exec.SessionID, &exec.Status,
+		&exec.TotalSteps, &exec.CompletedSteps, &exec.CurrentWave,
+		&exec.TotalCostUSD, &exec.CreatedAt, &exec.CompletedAt, &exec.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scan plan_execution: %w", err)
+	}
+
+	return &exec, nil
+}
+
+// GetPlanSteps retrieves all steps for a plan execution, ordered by wave and index.
+// GC-SPEC-PDR-v4-Phase-3: Step recovery for resumption.
+func (s *Store) GetPlanSteps(ctx context.Context, execID string) ([]PlanExecutionStep, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, execution_id, step_id, step_index, wave_number, agent_id, prompt, task_id,
+		       status, result, error, cost_usd, created_at, completed_at
+		FROM plan_execution_steps
+		WHERE execution_id = ?
+		ORDER BY wave_number ASC, step_index ASC`,
+		execID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query steps: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var steps []PlanExecutionStep
+	for rows.Next() {
+		var step PlanExecutionStep
+		var taskID sql.NullString
+		var result sql.NullString
+		var errMsg sql.NullString
+		var completedAt sql.NullTime
+		err := rows.Scan(
+			&step.ID, &step.ExecutionID, &step.StepID, &step.StepIndex, &step.WaveNumber,
+			&step.AgentID, &step.Prompt, &taskID, &step.Status, &result, &errMsg,
+			&step.CostUSD, &step.CreatedAt, &completedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan step: %w", err)
+		}
+		step.TaskID = taskID.String
+		step.Result = result.String
+		step.Error = errMsg.String
+		if completedAt.Valid {
+			step.CompletedAt = &completedAt.Time
+		}
+		steps = append(steps, step)
+	}
+
+	return steps, rows.Err()
+}
+
 // RecoverRunningPlans finds plans in 'running' state for crash recovery.
 func (s *Store) RecoverRunningPlans(ctx context.Context) ([]PlanExecutionRecovery, error) {
 	rows, err := s.db.QueryContext(ctx, `
@@ -3910,6 +4035,7 @@ func (s *Store) RecoverRunningPlans(ctx context.Context) ([]PlanExecutionRecover
 }
 
 // RecordStepComplete updates step status and increments completed_steps.
+// GC-SPEC-PDR-v4-Phase-2: Persistent step tracking with event publishing.
 func (s *Store) RecordStepComplete(ctx context.Context, execID, stepID, status, result, errMsg string, costUSD float64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -3919,7 +4045,7 @@ func (s *Store) RecordStepComplete(ctx context.Context, execID, stepID, status, 
 
 	_, err = tx.ExecContext(ctx, `
 		UPDATE plan_execution_steps
-		SET status = ?, result = ?, error = ?, cost_usd = ?, completed_at = CURRENT_TIMESTAMP
+		SET status = ?, result = ?, error = ?, cost_usd = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE execution_id = ? AND step_id = ?`,
 		status, result, errMsg, costUSD, execID, stepID,
 	)
@@ -3937,7 +4063,23 @@ func (s *Store) RecordStepComplete(ctx context.Context, execID, stepID, status, 
 		return fmt.Errorf("increment completed_steps: %w", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	// Publish step completion event
+	if s.bus != nil {
+		s.bus.Publish(bus.TopicPlanStepCompleted, map[string]interface{}{
+			"execution_id": execID,
+			"step_id":      stepID,
+			"status":       status,
+			"result":       result,
+			"error":        errMsg,
+			"cost_usd":     costUSD,
+		})
+	}
+
+	return nil
 }
 
 // Bus returns the event bus for publishing.
@@ -3957,15 +4099,18 @@ type PlanExecutionRecovery struct {
 
 // PlanExecutionStep represents a single step in a plan execution.
 type PlanExecutionStep struct {
-	ID         string
-	StepID     string
-	StepIndex  int
-	WaveNumber int
-	AgentID    string
-	Prompt     string
-	TaskID     string
-	Status     string
-	Result     string
-	Error      string
-	CostUSD    float64
+	ID          string
+	ExecutionID string
+	StepID      string
+	StepIndex   int
+	WaveNumber  int
+	AgentID     string
+	Prompt      string
+	TaskID      string
+	Status      string
+	Result      string
+	Error       string
+	CostUSD     float64
+	CreatedAt   time.Time
+	CompletedAt *time.Time
 }

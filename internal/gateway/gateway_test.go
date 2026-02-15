@@ -1649,6 +1649,98 @@ func TestPrometheusMetrics_PerAgentLabelsAndDelegations(t *testing.T) {
 	}
 }
 
+func TestBusDroppedEventsInAllEndpoints(t *testing.T) {
+	// Verify bus_dropped_events appears in /healthz, /metrics (JSON), and /metrics/prometheus.
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, nil, engine.Config{WorkerCount: 1, PollInterval: 100 * time.Millisecond, TaskTimeout: 1 * time.Minute})
+	eventBus := bus.New()
+
+	// Force some drops: subscribe, fill buffer, then overflow.
+	sub := eventBus.Subscribe("test")
+	for i := 0; i < 100; i++ {
+		eventBus.Publish("test.event", i)
+	}
+	// These will drop.
+	for i := 0; i < 5; i++ {
+		eventBus.Publish("test.event", "overflow")
+	}
+	eventBus.Unsubscribe(sub)
+
+	expectedDrops := eventBus.DroppedEventCount()
+	if expectedDrops == 0 {
+		t.Fatal("expected some dropped events for this test")
+	}
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+		Bus:       eventBus,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// 1. /healthz
+	resp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+	var healthBody map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&healthBody); err != nil {
+		t.Fatalf("decode healthz: %v", err)
+	}
+	if _, ok := healthBody["bus_dropped_events"]; !ok {
+		t.Errorf("healthz missing bus_dropped_events, got: %v", healthBody)
+	}
+	if v, ok := healthBody["bus_dropped_events"].(float64); !ok || v != float64(expectedDrops) {
+		t.Errorf("healthz bus_dropped_events = %v, want %d", healthBody["bus_dropped_events"], expectedDrops)
+	}
+
+	// 2. /metrics (JSON)
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+	metricsResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer metricsResp.Body.Close()
+	var metricsBody map[string]interface{}
+	if err := json.NewDecoder(metricsResp.Body).Decode(&metricsBody); err != nil {
+		t.Fatalf("decode metrics: %v", err)
+	}
+	if _, ok := metricsBody["bus_dropped_events"]; !ok {
+		t.Errorf("metrics missing bus_dropped_events, got: %v", metricsBody)
+	}
+
+	// 3. /metrics/prometheus
+	promReq, err := http.NewRequest(http.MethodGet, ts.URL+"/metrics/prometheus", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	promReq.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+	promResp, err := http.DefaultClient.Do(promReq)
+	if err != nil {
+		t.Fatalf("GET /metrics/prometheus: %v", err)
+	}
+	defer promResp.Body.Close()
+	promBody, err := io.ReadAll(promResp.Body)
+	if err != nil {
+		t.Fatalf("read prom body: %v", err)
+	}
+	if !strings.Contains(string(promBody), "goclaw_bus_dropped_events_total") {
+		t.Errorf("prometheus output missing goclaw_bus_dropped_events_total, got:\n%s", string(promBody))
+	}
+	expectedLine := fmt.Sprintf("goclaw_bus_dropped_events_total %d", expectedDrops)
+	if !strings.Contains(string(promBody), expectedLine) {
+		t.Errorf("prometheus output missing expected line %q", expectedLine)
+	}
+}
+
 func TestAgentListViaRPC(t *testing.T) {
 	store := openStoreForGatewayTest(t)
 	eng := engine.New(store, engine.EchoProcessor{}, engine.Config{

@@ -165,24 +165,8 @@ func main() {
 		"tasks_recovered", recMetrics.RecoveredCount,
 		"recovery_duration_ms", recMetrics.RecoveryDuration.Milliseconds())
 
-	// Recover crashed plan executions.
-	// GC-SPEC-PDR-v4-Phase-1: Crash resilience via plan persistence.
-	recoveries, err := store.RecoverRunningPlans(ctx)
-	if err != nil {
-		logger.Warn("failed to query running plans for crash recovery", "error", err)
-	} else if len(recoveries) > 0 {
-		logger.Warn("found crashed plan executions at startup", "count", len(recoveries))
-		for _, rec := range recoveries {
-			if err := store.CompletePlanExecution(ctx, rec.ID, "failed", 0); err != nil {
-				logger.Warn("failed to mark crashed plan as failed", "exec_id", rec.ID, "error", err)
-			} else {
-				logger.Info("marked crashed plan as failed on restart",
-					"exec_id", rec.ID,
-					"plan_name", rec.PlanName,
-					"progress", fmt.Sprintf("%d/%d steps", rec.CompletedSteps, rec.TotalSteps))
-			}
-		}
-	}
+	// GC-SPEC-PDR-v4-Phase-3: Plan resumption is now handled after executor init (in background goroutine)
+	// This allows crashed plans to be resumed from their last checkpoint instead of marked as failed.
 
 	policyPath := filepath.Join(cfg.HomeDir, "policy.yaml")
 	if _, statErr := os.Stat(policyPath); os.IsNotExist(statErr) {
@@ -837,6 +821,40 @@ The system runs this checklist periodically to ensure health.
 	waiter := coordinator.NewWaiter(eventBus, store)
 	executor := coordinator.NewExecutor(registry, waiter, store)
 
+	// GC-SPEC-PDR-v4-Phase-3: Resume crashed plans in background
+	go func() {
+		recoveries, err := store.RecoverRunningPlans(context.Background())
+		if err != nil {
+			logger.Warn("failed to query running plans for resumption", "error", err)
+			return
+		}
+		if len(recoveries) == 0 {
+			return
+		}
+
+		logger.Info("attempting to resume crashed plans", "count", len(recoveries))
+		for _, rec := range recoveries {
+			plan, ok := plansMap[rec.PlanName]
+			if !ok {
+				logger.Warn("cannot resume plan: not found in config", "exec_id", rec.ID, "plan_name", rec.PlanName)
+				// Mark as failed since we can't find the plan definition
+				_ = store.CompletePlanExecution(context.Background(), rec.ID, "failed", 0)
+				continue
+			}
+
+			// Attempt resume
+			result, resumeErr := executor.Resume(context.Background(), rec.ID, plan)
+			if resumeErr != nil {
+				logger.Warn("failed to resume crashed plan", "exec_id", rec.ID, "error", resumeErr)
+			} else {
+				logger.Info("successfully resumed crashed plan",
+					"exec_id", rec.ID,
+					"plan_name", rec.PlanName,
+					"final_cost", result.TotalCost())
+			}
+		}
+	}()
+
 	gw := gateway.New(gateway.Config{
 		Store:             store,
 		Registry:          registry,
@@ -851,6 +869,7 @@ The system runs this checklist periodically to ensure health.
 		Plans:             planSummaries,
 		PlansMap:          plansMap,
 		Executor:          executor,
+		WasmHost:          wasmHost,
 	})
 
 	server := &http.Server{

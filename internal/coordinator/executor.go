@@ -61,15 +61,42 @@ func (e *Executor) Execute(ctx context.Context, plan *Plan, sessionID string) (*
 		return nil, fmt.Errorf("invalid plan: %w", err)
 	}
 
+	// GC-SPEC-PDR-v4-Phase-2: Initialize step records for persistence
+	if e.store != nil {
+		stepRecords := make([]persistence.PlanExecutionStep, 0, len(plan.Steps))
+		for waveNum, wave := range order {
+			for stepIdx, step := range wave {
+				stepRecords = append(stepRecords, persistence.PlanExecutionStep{
+					StepID:     step.ID,
+					StepIndex:  stepIdx,
+					WaveNumber: waveNum,
+					AgentID:    step.AgentID,
+					Prompt:     step.Prompt,
+				})
+			}
+		}
+		if err := e.store.InitializePlanSteps(ctx, execID, stepRecords); err != nil {
+			if e.store != nil {
+				_ = e.store.CompletePlanExecution(ctx, execID, "failed", 0)
+			}
+			return nil, fmt.Errorf("initialize step records: %w", err)
+		}
+	}
+
 	for waveNum, wave := range order {
 		if len(wave) == 0 {
 			continue
 		}
-		if err := e.executeWave(ctx, sessionID, wave, result); err != nil {
+		if err := e.executeWave(ctx, execID, sessionID, wave, result); err != nil {
 			if e.store != nil {
 				_ = e.store.CompletePlanExecution(ctx, execID, "failed", result.TotalCost())
 			}
 			return result, fmt.Errorf("wave %d failed: %w", waveNum, err)
+		}
+
+		// GC-SPEC-PDR-v4-Phase-2: Track completed waves for resumption
+		if e.store != nil {
+			_ = e.store.UpdatePlanWave(ctx, execID, waveNum+1)
 		}
 	}
 
@@ -81,8 +108,108 @@ func (e *Executor) Execute(ctx context.Context, plan *Plan, sessionID string) (*
 	return result, nil
 }
 
+// Resume continues execution of a crashed plan from the last completed wave.
+// GC-SPEC-PDR-v4-Phase-3: Plan resumption after crash.
+func (e *Executor) Resume(ctx context.Context, execID string, plan *Plan) (*ExecutionResult, error) {
+	if err := plan.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid plan: %w", err)
+	}
+
+	// Hydrate plan execution state
+	if e.store == nil {
+		return nil, fmt.Errorf("cannot resume without store")
+	}
+
+	exec, err := e.store.GetPlanExecution(ctx, execID)
+	if err != nil {
+		return nil, fmt.Errorf("hydrate plan execution: %w", err)
+	}
+
+	steps, err := e.store.GetPlanSteps(ctx, execID)
+	if err != nil {
+		return nil, fmt.Errorf("hydrate plan steps: %w", err)
+	}
+
+	// Build execution result from persisted state
+	result := &ExecutionResult{
+		ExecutionID: execID,
+		StepResults: make(map[string]StepResult),
+	}
+
+	// Populate results from persisted steps
+	stepMap := make(map[string]persistence.PlanExecutionStep)
+	for _, s := range steps {
+		stepMap[s.StepID] = s
+		if s.Status == "succeeded" || s.Status == "failed" {
+			result.StepResults[s.StepID] = StepResult{
+				Status:  s.Status,
+				Output:  s.Result,
+				Error:   s.Error,
+				CostUSD: s.CostUSD,
+			}
+		}
+	}
+
+	// Toposort to get wave structure
+	order, err := topoSort(plan.Steps)
+	if err != nil {
+		if e.store != nil {
+			_ = e.store.CompletePlanExecution(ctx, execID, "failed", result.TotalCost())
+		}
+		return nil, fmt.Errorf("invalid plan: %w", err)
+	}
+
+	// Get session ID from hydrated execution
+	sessionID := exec.SessionID
+
+	// Resume from last completed wave
+	currentWave := exec.CurrentWave
+	for waveNum := currentWave; waveNum < len(order); waveNum++ {
+		wave := order[waveNum]
+		if len(wave) == 0 {
+			continue
+		}
+
+		// Filter to only pending/running steps (skip completed)
+		var pendingSteps []PlanStep
+		for _, step := range wave {
+			if persisted, ok := stepMap[step.ID]; ok && (persisted.Status == "succeeded" || persisted.Status == "failed") {
+				// Already completed, skip
+				continue
+			}
+			pendingSteps = append(pendingSteps, step)
+		}
+
+		// If no pending steps, this wave already completed
+		if len(pendingSteps) == 0 {
+			continue
+		}
+
+		// Execute pending steps in this wave
+		if err := e.executeWave(ctx, execID, sessionID, pendingSteps, result); err != nil {
+			if e.store != nil {
+				_ = e.store.CompletePlanExecution(ctx, execID, "failed", result.TotalCost())
+			}
+			return result, fmt.Errorf("wave %d failed: %w", waveNum, err)
+		}
+
+		// Track completed wave
+		if e.store != nil {
+			_ = e.store.UpdatePlanWave(ctx, execID, waveNum+1)
+		}
+	}
+
+	// Record final completion
+	if e.store != nil {
+		_ = e.store.CompletePlanExecution(ctx, execID, "succeeded", result.TotalCost())
+	}
+
+	return result, nil
+}
+
 // executeWave runs all steps in a wave (parallel independent steps).
-func (e *Executor) executeWave(ctx context.Context, sessionID string, steps []PlanStep, result *ExecutionResult) error {
+// GC-SPEC-PDR-v4-Phase-2: Persistent step tracking in executeWave.
+func (e *Executor) executeWave(ctx context.Context, execID, sessionID string, steps []PlanStep, result *ExecutionResult) error {
 	// Create all tasks in this wave
 	taskToStep := make(map[string]string) // taskID -> stepID
 	var taskIDs []string
@@ -108,6 +235,15 @@ func (e *Executor) executeWave(ctx context.Context, sessionID string, steps []Pl
 			TaskID: taskID,
 			Status: "RUNNING",
 		}
+
+		// GC-SPEC-PDR-v4-Phase-2: Publish step started event
+		if e.store != nil && e.store.Bus() != nil {
+			e.store.Bus().Publish("plan.step.started", map[string]interface{}{
+				"execution_id": execID,
+				"step_id":      step.ID,
+				"task_id":      taskID,
+			})
+		}
 	}
 
 	if e.waiter == nil {
@@ -128,6 +264,16 @@ func (e *Executor) executeWave(ctx context.Context, sessionID string, steps []Pl
 			CostUSD:    tr.CostUSD,
 			DurationMs: tr.DurationMs,
 			Error:      tr.Error,
+		}
+
+		// GC-SPEC-PDR-v4-Phase-2: Record step completion for persistence
+		if e.store != nil {
+			recordErr := e.store.RecordStepComplete(ctx, execID, stepID, tr.Status, tr.Output, tr.Error, tr.CostUSD)
+			if recordErr != nil {
+				// Log but don't fail - best-effort persistence
+				// In production, this would log to structured logger
+				_ = recordErr
+			}
 		}
 	}
 

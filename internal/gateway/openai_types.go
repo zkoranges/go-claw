@@ -6,6 +6,7 @@ type ChatCompletionRequest struct {
 	Messages []ChatCompletionMessage `json:"messages"`
 	Stream   bool                    `json:"stream,omitempty"`
 	User     string                  `json:"user,omitempty"`
+	Tools    []any                   `json:"tools,omitempty"`
 }
 
 // ChatCompletionMessage represents a message in the chat history.

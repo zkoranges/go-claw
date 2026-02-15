@@ -45,6 +45,12 @@ func (e *SkillFault) Error() string {
 // DefaultMemoryLimitPages is 160 pages = 10MB (each WASM page = 64KB).
 const DefaultMemoryLimitPages = 160
 
+// DefaultAggregateMemoryLimitPages is 640 pages = 40MB total across all modules.
+const DefaultAggregateMemoryLimitPages uint32 = 640
+
+// FaultMemoryExhausted is returned when aggregate WASM memory is exhausted.
+const FaultMemoryExhausted = "WASM_HOST_MEMORY_EXHAUSTED"
+
 // DefaultInvokeTimeout is the wall-clock limit for a single skill invocation.
 const DefaultInvokeTimeout = 30 * time.Second
 
@@ -56,6 +62,8 @@ type Config struct {
 	// GC-SPEC-SKL-005: Resource limits for WASM invocations.
 	// MemoryLimitPages caps memory per module (1 page = 64KB). 0 uses DefaultMemoryLimitPages.
 	MemoryLimitPages uint32
+	// AggregateMemoryLimitPages caps total memory across all loaded modules. 0 uses DefaultAggregateMemoryLimitPages.
+	AggregateMemoryLimitPages uint32
 	// InvokeTimeout caps wall-clock time per invocation. 0 uses DefaultInvokeTimeout.
 	InvokeTimeout time.Duration
 }
@@ -70,8 +78,10 @@ type Host struct {
 
 	hostFunctions map[string]struct{}
 
-	modulesMu sync.Mutex
-	modules   map[string]api.Module
+	modulesMu            sync.Mutex
+	modules              map[string]api.Module
+	moduleMemoryPages    map[string]uint32
+	aggregateMemoryLimit uint32
 }
 
 func NewHost(ctx context.Context, cfg Config) (*Host, error) {
@@ -86,6 +96,10 @@ func NewHost(ctx context.Context, cfg Config) (*Host, error) {
 	if memPages == 0 {
 		memPages = DefaultMemoryLimitPages
 	}
+	aggLimit := cfg.AggregateMemoryLimitPages
+	if aggLimit == 0 {
+		aggLimit = DefaultAggregateMemoryLimitPages
+	}
 	invokeTimeout := cfg.InvokeTimeout
 	if invokeTimeout == 0 {
 		invokeTimeout = DefaultInvokeTimeout
@@ -97,13 +111,15 @@ func NewHost(ctx context.Context, cfg Config) (*Host, error) {
 		WithCloseOnContextDone(true)
 
 	h := &Host{
-		store:         cfg.Store,
-		policy:        cfg.Policy,
-		logger:        cfg.Logger,
-		runtime:       wazero.NewRuntimeWithConfig(ctx, runtimeCfg),
-		invokeTimeout: invokeTimeout,
-		hostFunctions: map[string]struct{}{},
-		modules:       map[string]api.Module{},
+		store:                cfg.Store,
+		policy:               cfg.Policy,
+		logger:               cfg.Logger,
+		runtime:              wazero.NewRuntimeWithConfig(ctx, runtimeCfg),
+		invokeTimeout:        invokeTimeout,
+		hostFunctions:        map[string]struct{}{},
+		modules:              map[string]api.Module{},
+		moduleMemoryPages:    map[string]uint32{},
+		aggregateMemoryLimit: aggLimit,
 	}
 
 	builder := h.runtime.NewHostModuleBuilder("host")
@@ -131,6 +147,7 @@ func (h *Host) Close(ctx context.Context) error {
 	for name, module := range h.modules {
 		_ = module.Close(ctx)
 		delete(h.modules, name)
+		delete(h.moduleMemoryPages, name)
 	}
 	h.modulesMu.Unlock()
 	return h.runtime.Close(ctx)
@@ -141,6 +158,19 @@ func (h *Host) HasModule(name string) bool {
 	defer h.modulesMu.Unlock()
 	_, ok := h.modules[name]
 	return ok
+}
+
+// MemoryStats returns aggregate memory pages, per-module breakdown, and the configured limit.
+func (h *Host) MemoryStats() (aggregatePages uint32, perModule map[string]uint32, limit uint32) {
+	h.modulesMu.Lock()
+	defer h.modulesMu.Unlock()
+	perModule = make(map[string]uint32, len(h.moduleMemoryPages))
+	for name, pages := range h.moduleMemoryPages {
+		aggregatePages += pages
+		perModule[name] = pages
+	}
+	limit = h.aggregateMemoryLimit
+	return
 }
 
 func (h *Host) InvokeModuleRandom(ctx context.Context, moduleName string) (int32, error) {
@@ -273,18 +303,78 @@ func (h *Host) LoadModuleFromBytes(ctx context.Context, name string, wasmBytes [
 	if err != nil {
 		return fmt.Errorf("compile wasm module %s: %w", name, err)
 	}
+
+	// Pre-check: estimate memory from compiled module's memory section.
+	// Min() returns the initial page count declared in the module.
+	var estimatedPages uint32
+	for _, def := range compiled.ImportedMemories() {
+		estimatedPages += def.Min()
+	}
+	for _, def := range compiled.ExportedMemories() {
+		estimatedPages += def.Min()
+	}
+	// Each module uses at least 1 page for tracking purposes.
+	if estimatedPages == 0 {
+		estimatedPages = 1
+	}
+
+	h.modulesMu.Lock()
+	// Calculate current aggregate, excluding the module being replaced.
+	var currentAggregate uint32
+	for n, pages := range h.moduleMemoryPages {
+		if n != name {
+			currentAggregate += pages
+		}
+	}
+	if currentAggregate+estimatedPages > h.aggregateMemoryLimit {
+		h.modulesMu.Unlock()
+		return &SkillFault{
+			Reason: FaultMemoryExhausted,
+			Module: name,
+			Detail: fmt.Sprintf("WASM Host Memory Exhausted: aggregate=%d pages, new=%d pages, limit=%d pages",
+				currentAggregate, estimatedPages, h.aggregateMemoryLimit),
+		}
+	}
+	// Close existing module before instantiating replacement (wazero tracks names).
+	if old, ok := h.modules[name]; ok {
+		_ = old.Close(ctx)
+		delete(h.modules, name)
+		delete(h.moduleMemoryPages, name)
+	}
+	h.modulesMu.Unlock()
+
 	module, err := h.runtime.InstantiateModule(ctx, compiled, wazero.NewModuleConfig().WithName(name))
 	if err != nil {
 		return fmt.Errorf("instantiate wasm module %s: %w", name, err)
 	}
 
+	// Query actual memory pages after instantiation.
+	// Use Grow(0) which safely returns current pages without overflow risk.
+	actualPages := estimatedPages
+	func() {
+		defer func() { recover() }() // guard against nil memory interface
+		if mem := module.Memory(); mem != nil {
+			if pages, ok := mem.Grow(0); ok {
+				actualPages = pages
+			}
+		}
+	}()
+	if actualPages == 0 {
+		actualPages = 1
+	}
+
 	h.modulesMu.Lock()
 	defer h.modulesMu.Unlock()
-	if old, ok := h.modules[name]; ok {
-		_ = old.Close(ctx)
-	}
 	h.modules[name] = module
-	h.logger.Info("wasm module loaded", "module", name, "path", source)
+	h.moduleMemoryPages[name] = actualPages
+
+	// Recalculate aggregate for logging.
+	var aggregate uint32
+	for _, pages := range h.moduleMemoryPages {
+		aggregate += pages
+	}
+	h.logger.Info("wasm module loaded", "module", name, "path", source,
+		"memory_pages", actualPages, "aggregate_pages", aggregate, "limit_pages", h.aggregateMemoryLimit)
 	return nil
 }
 

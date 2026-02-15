@@ -3066,3 +3066,242 @@ func TestGetAllTaskContext_Isolated(t *testing.T) {
 	}
 }
 
+// GC-SPEC-PDR-v4-Phase-2: Tests for plan persistence infrastructure
+func TestStore_InitializePlanSteps(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openTestStore(t)
+
+	// Create a session
+	sessionID := "b6b5e87d-42f1-4f12-9c4c-7476d52382f1"
+	err := store.EnsureSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	// Create a plan execution
+	execID := "6fd5f90c-51a5-4234-b8fd-aed1a47f2b5c"
+	err = store.CreatePlanExecution(ctx, execID, "test-plan", sessionID, 3)
+	if err != nil {
+		t.Fatalf("create plan execution: %v", err)
+	}
+
+	// Initialize steps
+	steps := []persistence.PlanExecutionStep{
+		{StepID: "step-1", StepIndex: 0, WaveNumber: 0, AgentID: "agent-1", Prompt: "prompt 1"},
+		{StepID: "step-2", StepIndex: 1, WaveNumber: 0, AgentID: "agent-2", Prompt: "prompt 2"},
+		{StepID: "step-3", StepIndex: 0, WaveNumber: 1, AgentID: "agent-3", Prompt: "prompt 3"},
+	}
+	err = store.InitializePlanSteps(ctx, execID, steps)
+	if err != nil {
+		t.Fatalf("initialize plan steps: %v", err)
+	}
+
+	// Verify steps were created
+	rows, err := store.DB().QueryContext(ctx, `
+		SELECT step_id, status, wave_number FROM plan_execution_steps
+		WHERE execution_id = ? ORDER BY wave_number, step_index
+	`, execID)
+	if err != nil {
+		t.Fatalf("query steps: %v", err)
+	}
+	defer rows.Close()
+
+	stepCount := 0
+	for rows.Next() {
+		var stepID, status string
+		var waveNum int
+		if err := rows.Scan(&stepID, &status, &waveNum); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if status != "pending" {
+			t.Fatalf("step %s has wrong status: %s", stepID, status)
+		}
+		stepCount++
+	}
+	if stepCount != 3 {
+		t.Fatalf("expected 3 steps, got %d", stepCount)
+	}
+}
+
+func TestStore_UpdatePlanWave(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openTestStore(t)
+
+	// Create session and execution
+	sessionID := "c6c5f87e-52f2-4f13-9d5d-b1e2b5af3c2a"
+	err := store.EnsureSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	execID := "7gd6a91d-62b6-5345-c9ge-bfe2b58g3c6d"
+	err = store.CreatePlanExecution(ctx, execID, "test-plan", sessionID, 2)
+	if err != nil {
+		t.Fatalf("create plan execution: %v", err)
+	}
+
+	// Update wave
+	err = store.UpdatePlanWave(ctx, execID, 1)
+	if err != nil {
+		t.Fatalf("update wave: %v", err)
+	}
+
+	// Verify wave was updated
+	var waveNum int
+	err = store.DB().QueryRowContext(ctx, `
+		SELECT current_wave FROM plan_executions WHERE id = ?
+	`, execID).Scan(&waveNum)
+	if err != nil {
+		t.Fatalf("query wave: %v", err)
+	}
+	if waveNum != 1 {
+		t.Fatalf("expected wave 1, got %d", waveNum)
+	}
+}
+
+func TestStore_RecordStepComplete_PublishesEvent(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openTestStore(t)
+
+	// Create session and execution
+	sessionID := "c6c5f87e-52f2-4f13-9d5d-b1e2b5af3c2a"
+	err := store.EnsureSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	execID := "7gd6a91d-62b6-5345-c9ge-bfe2b58g3c6d"
+	err = store.CreatePlanExecution(ctx, execID, "test-plan", sessionID, 1)
+	if err != nil {
+		t.Fatalf("create plan execution: %v", err)
+	}
+
+	// Initialize a step
+	steps := []persistence.PlanExecutionStep{
+		{StepID: "step-1", StepIndex: 0, WaveNumber: 0, AgentID: "agent-1", Prompt: "prompt 1"},
+	}
+	err = store.InitializePlanSteps(ctx, execID, steps)
+	if err != nil {
+		t.Fatalf("initialize steps: %v", err)
+	}
+
+	// Record step completion
+	err = store.RecordStepComplete(ctx, execID, "step-1", "succeeded", "output", "", 0.5)
+	if err != nil {
+		t.Fatalf("record step complete: %v", err)
+	}
+
+	// Verify step was updated
+	var status, result string
+	err = store.DB().QueryRowContext(ctx, `
+		SELECT status, result FROM plan_execution_steps
+		WHERE execution_id = ? AND step_id = ?
+	`, execID, "step-1").Scan(&status, &result)
+	if err != nil {
+		t.Fatalf("query step: %v", err)
+	}
+	if status != "succeeded" || result != "output" {
+		t.Fatalf("step has wrong data: status=%s, result=%s", status, result)
+	}
+
+	// Verify completed_steps was incremented
+	var completedSteps int
+	err = store.DB().QueryRowContext(ctx, `
+		SELECT completed_steps FROM plan_executions WHERE id = ?
+	`, execID).Scan(&completedSteps)
+	if err != nil {
+		t.Fatalf("query plan: %v", err)
+	}
+	if completedSteps != 1 {
+		t.Fatalf("expected 1 completed step, got %d", completedSteps)
+	}
+}
+
+func TestStore_GetPlanExecution(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openTestStore(t)
+
+	// Create session and execution
+	sessionID := "c6c5f87e-52f2-4f13-9d5d-b1e2b5af3c2a"
+	err := store.EnsureSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	execID := "7gd6a91d-62b6-5345-c9ge-bfe2b58g3c6d"
+	err = store.CreatePlanExecution(ctx, execID, "my-plan", sessionID, 5)
+	if err != nil {
+		t.Fatalf("create plan execution: %v", err)
+	}
+
+	// Update wave and mark step complete
+	_ = store.UpdatePlanWave(ctx, execID, 2)
+	steps := []persistence.PlanExecutionStep{
+		{StepID: "s1", StepIndex: 0, WaveNumber: 0, AgentID: "agent-1", Prompt: "p1"},
+		{StepID: "s2", StepIndex: 0, WaveNumber: 1, AgentID: "agent-2", Prompt: "p2"},
+	}
+	_ = store.InitializePlanSteps(ctx, execID, steps)
+	_ = store.RecordStepComplete(ctx, execID, "s1", "succeeded", "out1", "", 0.1)
+
+	// Get plan execution
+	exec, err := store.GetPlanExecution(ctx, execID)
+	if err != nil {
+		t.Fatalf("get plan execution: %v", err)
+	}
+
+	if exec.ID != execID || exec.PlanName != "my-plan" {
+		t.Fatalf("wrong execution: ID=%s, PlanName=%s", exec.ID, exec.PlanName)
+	}
+	if exec.TotalSteps != 5 || exec.CompletedSteps != 1 || exec.CurrentWave != 2 {
+		t.Fatalf("wrong counts: total=%d, completed=%d, wave=%d",
+			exec.TotalSteps, exec.CompletedSteps, exec.CurrentWave)
+	}
+}
+
+func TestStore_GetPlanSteps(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openTestStore(t)
+
+	// Create session and execution
+	sessionID := "c6c5f87e-52f2-4f13-9d5d-b1e2b5af3c2a"
+	err := store.EnsureSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	execID := "7gd6a91d-62b6-5345-c9ge-bfe2b58g3c6d"
+	err = store.CreatePlanExecution(ctx, execID, "my-plan", sessionID, 3)
+	if err != nil {
+		t.Fatalf("create plan execution: %v", err)
+	}
+
+	// Initialize steps (intentionally out of order)
+	steps := []persistence.PlanExecutionStep{
+		{StepID: "s2", StepIndex: 1, WaveNumber: 0, AgentID: "agent-2", Prompt: "p2"},
+		{StepID: "s1", StepIndex: 0, WaveNumber: 0, AgentID: "agent-1", Prompt: "p1"},
+		{StepID: "s3", StepIndex: 0, WaveNumber: 1, AgentID: "agent-3", Prompt: "p3"},
+	}
+	err = store.InitializePlanSteps(ctx, execID, steps)
+	if err != nil {
+		t.Fatalf("initialize steps: %v", err)
+	}
+
+	// Get steps
+	retrieved, err := store.GetPlanSteps(ctx, execID)
+	if err != nil {
+		t.Fatalf("get plan steps: %v", err)
+	}
+
+	if len(retrieved) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(retrieved))
+	}
+
+	// Verify order (wave, then index)
+	if retrieved[0].StepID != "s1" || retrieved[1].StepID != "s2" || retrieved[2].StepID != "s3" {
+		t.Fatalf("wrong step order: %v", retrieved)
+	}
+	if retrieved[0].WaveNumber != 0 || retrieved[2].WaveNumber != 1 {
+		t.Fatalf("wrong wave numbers: %v", retrieved)
+	}
+}
+

@@ -218,14 +218,23 @@ func TestExecutor_Events(t *testing.T) {
 	}
 
 	// Collect events from subscription within timeout.
+	// Note: With step persistence, we now publish step started events too.
 	var events []bus.Event
 	timeout := time.After(5 * time.Second)
 	for {
 		select {
 		case ev := <-sub.Ch():
 			events = append(events, ev)
-			// We expect exactly 2 events: started + completed.
-			if len(events) >= 2 {
+			// We expect at least 2 events: started + completion, plus any step events.
+			// Keep collecting until we see completion event or timeout.
+			hasCompletion := false
+			for _, e := range events {
+				if e.Topic == bus.TopicPlanExecutionCompleted {
+					hasCompletion = true
+					break
+				}
+			}
+			if hasCompletion && len(events) >= 2 {
 				goto verify
 			}
 		case <-timeout:
@@ -257,10 +266,21 @@ verify:
 		t.Fatalf("started event total_steps: got %v, want 1", startedPayload["total_steps"])
 	}
 
-	// Verify event 2: plan.execution.completed
-	completedEvent := events[1]
+	// Find the completion event (skip any step-related events in between)
+	var completedEvent *bus.Event
+	for i := 1; i < len(events); i++ {
+		if events[i].Topic == bus.TopicPlanExecutionCompleted {
+			completedEvent = &events[i]
+			break
+		}
+	}
+	if completedEvent == nil {
+		t.Fatalf("no completion event found in %d events", len(events))
+	}
+
+	// Verify event: plan.execution.completed
 	if completedEvent.Topic != bus.TopicPlanExecutionCompleted {
-		t.Fatalf("event 1 topic: got %q, want %s", completedEvent.Topic, bus.TopicPlanExecutionCompleted)
+		t.Fatalf("completion event topic: got %q, want %s", completedEvent.Topic, bus.TopicPlanExecutionCompleted)
 	}
 	completedPayload, ok := completedEvent.Payload.(map[string]interface{})
 	if !ok {
@@ -272,5 +292,151 @@ verify:
 	}
 	if completedPayload["status"] != "succeeded" {
 		t.Fatalf("completed status: got %v, want succeeded", completedPayload["status"])
+	}
+}
+
+// GC-SPEC-PDR-v4-Phase-3: Test plan resumption from crash checkpoint.
+func TestExecutor_Resume_FullRecovery(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	store, err := persistence.Open(dbPath, nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	// Create session
+	sessionID := "d7d6a91d-72b7-6456-d0de-dfe3c69f4d7e"
+	if err := store.EnsureSession(ctx, sessionID); err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	// Create and partially execute a plan
+	plan := &Plan{
+		Name: "recovery-test",
+		Steps: []PlanStep{
+			{ID: "s1", AgentID: "a1", Prompt: "step 1"},
+			{ID: "s2", AgentID: "a2", Prompt: "step 2"},
+		},
+	}
+
+	execID := "e8e7b02e-83c8-7567-e1de-dfe4d70f5e8f"
+	if err := store.CreatePlanExecution(ctx, execID, plan.Name, sessionID, 2); err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+
+	// Initialize steps
+	stepRecs := []persistence.PlanExecutionStep{
+		{StepID: "s1", StepIndex: 0, WaveNumber: 0, AgentID: "a1", Prompt: "step 1"},
+		{StepID: "s2", StepIndex: 0, WaveNumber: 1, AgentID: "a2", Prompt: "step 2"},
+	}
+	if err := store.InitializePlanSteps(ctx, execID, stepRecs); err != nil {
+		t.Fatalf("initialize steps: %v", err)
+	}
+
+	// Mark first step as completed
+	if err := store.RecordStepComplete(ctx, execID, "s1", "succeeded", "output 1", "", 0.1); err != nil {
+		t.Fatalf("record step: %v", err)
+	}
+
+	// Mark wave 1 as completed
+	if err := store.UpdatePlanWave(ctx, execID, 1); err != nil {
+		t.Fatalf("update wave: %v", err)
+	}
+
+	// Create executor and resume
+	router := &mockRouter{}
+	executor := NewExecutor(router, nil, store)
+	result, err := executor.Resume(ctx, execID, plan)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	// Verify result has both steps
+	if len(result.StepResults) < 1 {
+		t.Fatalf("expected at least 1 step result, got %d", len(result.StepResults))
+	}
+
+	// Verify s1 was recovered
+	if s1, ok := result.StepResults["s1"]; !ok {
+		t.Fatal("s1 missing from results")
+	} else if s1.Status != "succeeded" || s1.Output != "output 1" {
+		t.Fatalf("s1 wrong result: status=%s, output=%s", s1.Status, s1.Output)
+	}
+
+	// Verify plan shows completion
+	exec, err := store.GetPlanExecution(ctx, execID)
+	if err != nil {
+		t.Fatalf("get execution: %v", err)
+	}
+	if exec.Status != "succeeded" {
+		t.Fatalf("final status: got %s, want succeeded", exec.Status)
+	}
+}
+
+// GC-SPEC-PDR-v4-Phase-3: Test resume skips completed waves.
+func TestExecutor_Resume_SkipsCompletedWaves(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	store, err := persistence.Open(dbPath, nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	// Create session
+	sessionID := "e8e7c03e-84d9-7678-f2de-eef5e81f6f0a"
+	if err := store.EnsureSession(ctx, sessionID); err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	// Create 3-wave plan
+	plan := &Plan{
+		Name: "multi-wave",
+		Steps: []PlanStep{
+			{ID: "s1", AgentID: "a1", Prompt: "wave 0"},
+			{ID: "s2", AgentID: "a2", Prompt: "wave 1", DependsOn: []string{"s1"}},
+			{ID: "s3", AgentID: "a3", Prompt: "wave 2", DependsOn: []string{"s2"}},
+		},
+	}
+
+	execID := "f9f8c13f-95ea-8789-a3de-fef6f92f7b1a"
+	if err := store.CreatePlanExecution(ctx, execID, plan.Name, sessionID, 3); err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+
+	// Initialize all steps
+	stepRecs := []persistence.PlanExecutionStep{
+		{StepID: "s1", StepIndex: 0, WaveNumber: 0, AgentID: "a1", Prompt: "wave 0"},
+		{StepID: "s2", StepIndex: 0, WaveNumber: 1, AgentID: "a2", Prompt: "wave 1"},
+		{StepID: "s3", StepIndex: 0, WaveNumber: 2, AgentID: "a3", Prompt: "wave 2"},
+	}
+	if err := store.InitializePlanSteps(ctx, execID, stepRecs); err != nil {
+		t.Fatalf("initialize steps: %v", err)
+	}
+
+	// Complete waves 0 and 1
+	for _, stepID := range []string{"s1", "s2"} {
+		if err := store.RecordStepComplete(ctx, execID, stepID, "succeeded", "output", "", 0.1); err != nil {
+			t.Fatalf("record step %s: %v", stepID, err)
+		}
+	}
+	if err := store.UpdatePlanWave(ctx, execID, 2); err != nil {
+		t.Fatalf("update wave: %v", err)
+	}
+
+	// Resume - should skip waves 0-1 and execute only wave 2
+	router := &mockRouter{}
+	executor := NewExecutor(router, nil, store)
+	result, err := executor.Resume(ctx, execID, plan)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	// Verify s3 was executed (should be in result)
+	if _, ok := result.StepResults["s3"]; !ok {
+		t.Fatal("s3 not in results (should have been re-executed)")
 	}
 }

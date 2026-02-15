@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/sandbox/legacy"
@@ -20,6 +21,7 @@ type Installer struct {
 	installDir string // $GOCLAW_HOME/installed/
 	store      *persistence.Store
 	logger     *slog.Logger
+	updateMu   sync.Map // Per-skill mutex for Update() serialization
 }
 
 func NewInstaller(homeDir string, store *persistence.Store, logger *slog.Logger) *Installer {
@@ -94,6 +96,13 @@ func (i *Installer) Update(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+
+	// Serialize concurrent updates to the same skill.
+	mu, _ := i.updateMu.LoadOrStore(safeName, &sync.Mutex{})
+	skillMu := mu.(*sync.Mutex)
+	skillMu.Lock()
+	defer skillMu.Unlock()
+
 	if i.store == nil {
 		return fmt.Errorf("missing store")
 	}
@@ -219,13 +228,6 @@ func (i *Installer) installToDir(ctx context.Context, name, destDir, srcURL, ref
 	// Determine source type from URL (AUD-012: distinguish local vs github).
 	source := sourceTypeFromURL(srcURL)
 
-	if i.store != nil {
-		// Record provenance in DB (default-deny: do not grant capabilities here).
-		if err := i.store.RegisterInstalledSkill(ctx, name, source, srcURL, ref); err != nil {
-			return err
-		}
-	}
-
 	// AUD-007: Atomic swap — rename old to .bak, move new into place, remove .bak.
 	// On failure, restore the backup.
 	backupDir := destDir + ".bak"
@@ -251,6 +253,16 @@ func (i *Installer) installToDir(ctx context.Context, name, destDir, srcURL, ref
 
 	// Success — remove backup.
 	_ = os.RemoveAll(backupDir)
+
+	// Record provenance in DB AFTER successful swap to ensure disk state
+	// always matches or leads DB state (no window where DB says "installed"
+	// but disk has old version).
+	if i.store != nil {
+		if err := i.store.RegisterInstalledSkill(ctx, name, source, srcURL, ref); err != nil {
+			i.log().Warn("skill installed but DB update failed", "name", name, "error", err)
+			// Don't fail — skill is on disk, DB is just stale.
+		}
+	}
 
 	// Record content hash for debugging; not yet surfaced.
 	sum := sha256.Sum256(data)

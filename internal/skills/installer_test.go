@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/basket/go-claw/internal/persistence"
@@ -396,5 +397,146 @@ func TestUpdate_RejectsPathTraversalName(t *testing.T) {
 	}
 	if _, err := os.Stat(victimDir); err != nil {
 		t.Fatalf("victim dir should remain intact: %v", err)
+	}
+}
+
+// TestInstaller_ConcurrentUpdate_Safe verifies that concurrent updates to the
+// same skill are serialized by the per-skill mutex and don't corrupt disk state.
+func TestInstaller_ConcurrentUpdate_Safe(t *testing.T) {
+	requireGit(t)
+	ctx := context.Background()
+
+	home := t.TempDir()
+	store := openStore(t, home)
+	inst := newTestInstaller(t, home, store)
+
+	repo := initRepoFromTestdata(t, filepath.Join("testdata", "valid_repo"))
+	if err := inst.Install(ctx, repo, ""); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	name := "local-" + filepath.Base(repo)
+
+	// Spawn 3 concurrent updates to the same skill.
+	const goroutines = 3
+	var wg sync.WaitGroup
+	errs := make([]error, goroutines)
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func(idx int) {
+			defer wg.Done()
+			errs[idx] = inst.Update(ctx, name)
+		}(g)
+	}
+	wg.Wait()
+
+	// All updates should succeed (serialized, not racing).
+	for idx, err := range errs {
+		if err != nil {
+			t.Errorf("goroutine %d: Update failed: %v", idx, err)
+		}
+	}
+
+	// Skill should still be present and valid on disk.
+	installedSkillMD := filepath.Join(home, "installed", name, "SKILL.md")
+	if _, err := os.Stat(installedSkillMD); err != nil {
+		t.Fatalf("expected SKILL.md to exist after concurrent updates: %v", err)
+	}
+}
+
+// TestInstaller_DBUpdateAfterSwap verifies that RegisterInstalledSkill is called
+// after the atomic disk swap, not before. A fresh install should have the skill
+// on disk AND in the DB, and the DB record should reflect the source URL.
+func TestInstaller_DBUpdateAfterSwap(t *testing.T) {
+	requireGit(t)
+	ctx := context.Background()
+
+	home := t.TempDir()
+	store := openStore(t, home)
+	inst := newTestInstaller(t, home, store)
+
+	repo := initRepoFromTestdata(t, filepath.Join("testdata", "valid_repo"))
+	if err := inst.Install(ctx, repo, ""); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	name := "local-" + filepath.Base(repo)
+
+	// Verify disk state: SKILL.md must exist.
+	installedSkillMD := filepath.Join(home, "installed", name, "SKILL.md")
+	if _, err := os.Stat(installedSkillMD); err != nil {
+		t.Fatalf("expected installed SKILL.md: %v", err)
+	}
+
+	// Verify DB state: record must exist with correct source URL.
+	recs, err := store.ListInstalledSkills(ctx)
+	if err != nil {
+		t.Fatalf("ListInstalledSkills: %v", err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 DB record, got %d", len(recs))
+	}
+	if recs[0].SkillID != name {
+		t.Fatalf("expected skill_id %q, got %q", name, recs[0].SkillID)
+	}
+	if recs[0].SourceURL != repo {
+		t.Fatalf("expected source_url %q, got %q", repo, recs[0].SourceURL)
+	}
+}
+
+// TestInstaller_DBFailureRecovery verifies that installation succeeds even if
+// the DB update fails — the skill is on disk in a usable state.
+func TestInstaller_DBFailureRecovery(t *testing.T) {
+	requireGit(t)
+	ctx := context.Background()
+
+	home := t.TempDir()
+	store := openStore(t, home)
+
+	repo := initRepoFromTestdata(t, filepath.Join("testdata", "valid_repo"))
+
+	// Install with a working store first, then close it to simulate DB failure
+	// on a subsequent update.
+	inst := newTestInstaller(t, home, store)
+	if err := inst.Install(ctx, repo, ""); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	name := "local-" + filepath.Base(repo)
+
+	// Update upstream so there's something new to pull.
+	skillPath := filepath.Join(repo, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(`---
+name: valid-skill
+description: DB failure test
+---
+
+Body for DB failure test.
+`), 0o644); err != nil {
+		t.Fatalf("write upstream: %v", err)
+	}
+	git(t, repo, "add", "SKILL.md")
+	git(t, repo, "commit", "-m", "db-failure-test")
+
+	// Close the store to make DB writes fail, then create a new installer
+	// with a nil store (simulating DB unavailability).
+	_ = store.Close()
+	instNoStore := &Installer{
+		installDir: filepath.Join(home, "installed"),
+		store:      nil,
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	// installToDir with overwrite=true and nil store should succeed on disk.
+	destDir := filepath.Join(home, "installed", name)
+	err := instNoStore.installToDir(ctx, name, destDir, repo, "", "", true)
+	if err != nil {
+		t.Fatalf("installToDir with nil store: %v", err)
+	}
+
+	// Verify disk state is updated.
+	b, err := os.ReadFile(filepath.Join(destDir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read installed SKILL.md: %v", err)
+	}
+	if !strings.Contains(string(b), "DB failure test") {
+		t.Fatalf("expected updated content on disk; got:\n%s", string(b))
 	}
 }

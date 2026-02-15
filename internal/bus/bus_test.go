@@ -1,6 +1,8 @@
 package bus
 
 import (
+	"bytes"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -175,4 +177,97 @@ done2:
 	if received != total {
 		t.Fatalf("received %d events, want %d", received, total)
 	}
+}
+
+func TestBus_DroppedEventLogging(t *testing.T) {
+	// Verify that warnings are logged at exponential thresholds (1, 10, 100).
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	b := NewWithLogger(logger)
+	sub := b.Subscribe("test")
+	defer b.Unsubscribe(sub)
+
+	// Fill buffer so subsequent publishes drop.
+	for i := 0; i < defaultBufferSize; i++ {
+		b.Publish("test.event", i)
+	}
+
+	// Publish enough to cross thresholds at 1 and 10.
+	for i := 0; i < 10; i++ {
+		b.Publish("test.event", "drop")
+	}
+
+	logOutput := buf.String()
+	if !containsSubstring(logOutput, "bus_dropped_events_reached_threshold") {
+		t.Fatalf("expected threshold warning in log output, got: %s", logOutput)
+	}
+	if b.DroppedEventCount() != 10 {
+		t.Fatalf("dropped count = %d, want 10", b.DroppedEventCount())
+	}
+}
+
+func TestBus_NoSpamming(t *testing.T) {
+	// Verify that the same threshold does not produce duplicate log entries.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	b := NewWithLogger(logger)
+	sub := b.Subscribe("test")
+	defer b.Unsubscribe(sub)
+
+	// Fill buffer.
+	for i := 0; i < defaultBufferSize; i++ {
+		b.Publish("test.event", i)
+	}
+
+	// Drop exactly 1 event — triggers threshold 1.
+	b.Publish("test.event", "drop1")
+	firstLog := buf.String()
+	if !containsSubstring(firstLog, "bus_dropped_events_reached_threshold") {
+		t.Fatalf("expected warning at threshold 1, got: %s", firstLog)
+	}
+
+	// Count occurrences of the threshold message.
+	count1 := countSubstring(firstLog, "bus_dropped_events_reached_threshold")
+	if count1 != 1 {
+		t.Fatalf("expected 1 threshold log at count=1, got %d", count1)
+	}
+
+	// Drop 8 more (total=9), none should trigger new log (next threshold is 10).
+	buf.Reset()
+	for i := 0; i < 8; i++ {
+		b.Publish("test.event", "drop")
+	}
+	if buf.Len() > 0 {
+		t.Fatalf("unexpected log output between thresholds: %s", buf.String())
+	}
+}
+
+func TestBus_DropThreshold(t *testing.T) {
+	tests := []struct {
+		count    int64
+		expected int64
+	}{
+		{1, 1},
+		{5, 1},
+		{10, 10},
+		{99, 10},
+		{100, 100},
+		{999, 100},
+		{1000, 1000},
+		{5000, 1000},
+	}
+	for _, tt := range tests {
+		got := dropThreshold(tt.count)
+		if got != tt.expected {
+			t.Errorf("dropThreshold(%d) = %d, want %d", tt.count, got, tt.expected)
+		}
+	}
+}
+
+func containsSubstring(s, substr string) bool {
+	return bytes.Contains([]byte(s), []byte(substr))
+}
+
+func countSubstring(s, substr string) int {
+	return bytes.Count([]byte(s), []byte(substr))
 }

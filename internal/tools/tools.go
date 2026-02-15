@@ -75,10 +75,12 @@ func (r *Registry) RegisterAll(g *genkit.Genkit) {
 	fileTools := registerFileTools(g, r)
 	shellTool := registerShell(g, r)
 	memTools := registerMemoryTools(g, r)
+	shoppingTool := registerShopping(g, r)
 	r.Tools = []ai.ToolRef{searchTool, readerTool}
 	r.Tools = append(r.Tools, fileTools...)
 	r.Tools = append(r.Tools, shellTool)
 	r.Tools = append(r.Tools, memTools...)
+	r.Tools = append(r.Tools, shoppingTool)
 	if r.Store != nil {
 		spawnTool := registerSpawn(g, r)
 		r.Tools = append(r.Tools, spawnTool)

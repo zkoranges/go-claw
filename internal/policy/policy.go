@@ -58,8 +58,9 @@ var knownCapabilities = map[string]struct{}{
 	"legacy.dangerous":    {},
 	"skill.inject":        {},
 	"tools.mcp":           {},
-	"agent.create":        {},
-	"agent.remove":        {},
+	"agent.create":            {},
+	"agent.remove":            {},
+	"tools.price_comparison":  {},
 }
 
 func Load(path string) (Policy, error) {

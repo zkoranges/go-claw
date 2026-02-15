@@ -81,6 +81,11 @@ type Config struct {
 
 	// Executor runs multi-step workflow plans (GC-SPEC-PDR-v4-Phase-4).
 	Executor *coordinator.Executor
+
+	// WasmHost exposes WASM memory statistics for observability.
+	WasmHost interface {
+		MemoryStats() (uint32, map[string]uint32, uint32)
+	}
 }
 
 type Server struct {
@@ -194,6 +199,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 
 	agentCount := len(s.cfg.Registry.ListRunningAgents())
 
+	var busDroppedEvents int64
+	if s.cfg.Bus != nil {
+		busDroppedEvents = s.cfg.Bus.DroppedEventCount()
+	}
+
 	payload := map[string]any{
 		"healthy":               dbOK,
 		"db_ok":                 dbOK,
@@ -202,6 +212,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 		"skill_detail":          tinygoDetail,
 		"replay_backlog_events": replayBacklog,
 		"agent_count":           agentCount,
+		"bus_dropped_events":    busDroppedEvents,
+	}
+	if s.cfg.WasmHost != nil {
+		aggPages, _, limitPages := s.cfg.WasmHost.MemoryStats()
+		payload["wasm_memory_pages"] = aggPages
+		payload["wasm_memory_limit_pages"] = limitPages
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if !dbOK {
@@ -246,6 +262,11 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		delegationCount = c
 	}
 
+	var busDroppedEvents int64
+	if s.cfg.Bus != nil {
+		busDroppedEvents = s.cfg.Bus.DroppedEventCount()
+	}
+
 	payload := map[string]any{
 		"pending_tasks":        mc.Pending,
 		"running_tasks":        mc.Running,
@@ -258,7 +279,14 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"agent_count":          len(runningAgents),
 		"agent_messages_total": agentMsgCount,
 		"delegations_total":    delegationCount,
+		"bus_dropped_events":   busDroppedEvents,
 		"agents":               perAgent,
+	}
+	if s.cfg.WasmHost != nil {
+		aggPages, perMod, limitPages := s.cfg.WasmHost.MemoryStats()
+		payload["wasm_memory_pages"] = aggPages
+		payload["wasm_memory_limit_pages"] = limitPages
+		payload["wasm_module_count"] = len(perMod)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(payload)
@@ -322,6 +350,25 @@ func (s *Server) handlePrometheusMetrics(w http.ResponseWriter, r *http.Request)
 		fmt.Fprintf(w, "# HELP goclaw_delegations_total Total delegate_task invocations.\n")
 		fmt.Fprintf(w, "# TYPE goclaw_delegations_total counter\n")
 		fmt.Fprintf(w, "goclaw_delegations_total %d\n", delegations)
+	}
+	if s.cfg.Bus != nil {
+		fmt.Fprintf(w, "# HELP goclaw_bus_dropped_events_total Total events dropped due to full subscriber buffers.\n")
+		fmt.Fprintf(w, "# TYPE goclaw_bus_dropped_events_total counter\n")
+		fmt.Fprintf(w, "goclaw_bus_dropped_events_total %d\n", s.cfg.Bus.DroppedEventCount())
+	}
+	if s.cfg.WasmHost != nil {
+		aggPages, perMod, limitPages := s.cfg.WasmHost.MemoryStats()
+		fmt.Fprintf(w, "# HELP goclaw_wasm_memory_pages Aggregate WASM memory pages across all modules.\n")
+		fmt.Fprintf(w, "# TYPE goclaw_wasm_memory_pages gauge\n")
+		fmt.Fprintf(w, "goclaw_wasm_memory_pages %d\n", aggPages)
+		fmt.Fprintf(w, "# HELP goclaw_wasm_memory_limit_pages Configured WASM aggregate memory limit in pages.\n")
+		fmt.Fprintf(w, "# TYPE goclaw_wasm_memory_limit_pages gauge\n")
+		fmt.Fprintf(w, "goclaw_wasm_memory_limit_pages %d\n", limitPages)
+		fmt.Fprintf(w, "# HELP goclaw_wasm_module_memory_pages WASM memory pages per module.\n")
+		fmt.Fprintf(w, "# TYPE goclaw_wasm_module_memory_pages gauge\n")
+		for mod, pages := range perMod {
+			fmt.Fprintf(w, "goclaw_wasm_module_memory_pages{module=%q} %d\n", mod, pages)
+		}
 	}
 }
 

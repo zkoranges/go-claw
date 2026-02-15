@@ -78,11 +78,12 @@ func (s *Subscription) Ch() <-chan Event {
 
 // Bus is a simple in-process pub/sub message bus with topic prefix matching.
 type Bus struct {
-	mu             sync.RWMutex
-	subs           map[int]*Subscription
-	nextID         int
-	logger         *slog.Logger
-	droppedEvents  atomic.Int64
+	mu              sync.RWMutex
+	subs            map[int]*Subscription
+	nextID          int
+	logger          *slog.Logger
+	droppedEvents   atomic.Int64
+	lastDropWarning atomic.Int64 // last threshold at which a warning was logged
 }
 
 // New creates a new Bus.
@@ -148,7 +149,8 @@ func (b *Bus) Publish(topic string, payload interface{}) {
 			case sub.ch <- event:
 			default:
 				// Buffer full - increment counter instead of logging per-drop (avoid I/O spike).
-				b.droppedEvents.Add(1)
+				newCount := b.droppedEvents.Add(1)
+				b.maybeLogDropWarning(newCount, topic)
 			}
 		}
 	}
@@ -164,4 +166,39 @@ func (b *Bus) SubscriberCount() int {
 // DroppedEventCount returns the total number of events dropped due to full buffers.
 func (b *Bus) DroppedEventCount() int64 {
 	return b.droppedEvents.Load()
+}
+
+// dropThreshold returns the next exponential threshold (1, 10, 100, 1000, ...) at or below count.
+func dropThreshold(count int64) int64 {
+	threshold := int64(1)
+	for threshold*10 <= count {
+		threshold *= 10
+	}
+	return threshold
+}
+
+// maybeLogDropWarning logs a warning when dropped event count crosses an exponential threshold.
+// Uses CompareAndSwap to avoid duplicate logs from concurrent publishers.
+func (b *Bus) maybeLogDropWarning(newCount int64, topic string) {
+	if b.logger == nil {
+		return
+	}
+	threshold := dropThreshold(newCount)
+	if newCount < threshold {
+		return
+	}
+	// Only log when we exactly hit a threshold boundary.
+	if newCount != threshold {
+		return
+	}
+	lastWarned := b.lastDropWarning.Load()
+	if threshold <= lastWarned {
+		return
+	}
+	if b.lastDropWarning.CompareAndSwap(lastWarned, threshold) {
+		b.logger.Warn("bus_dropped_events_reached_threshold",
+			slog.Int64("count", newCount),
+			slog.String("topic", topic),
+		)
+	}
 }

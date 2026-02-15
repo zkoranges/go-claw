@@ -402,3 +402,173 @@ func containsHelper(s, sub string) bool {
 	}
 	return false
 }
+
+func TestHost_MemoryStats_Empty(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	h, err := wasm.NewHost(context.Background(), wasm.Config{
+		Store:  store,
+		Policy: policy.Default(),
+	})
+	if err != nil {
+		t.Fatalf("new host: %v", err)
+	}
+	defer func() { _ = h.Close(context.Background()) }()
+
+	agg, perMod, limit := h.MemoryStats()
+	if agg != 0 {
+		t.Fatalf("expected 0 aggregate pages, got %d", agg)
+	}
+	if len(perMod) != 0 {
+		t.Fatalf("expected empty per-module map, got %d entries", len(perMod))
+	}
+	if limit != wasm.DefaultAggregateMemoryLimitPages {
+		t.Fatalf("expected limit %d, got %d", wasm.DefaultAggregateMemoryLimitPages, limit)
+	}
+}
+
+func TestHost_MemoryStats_AfterLoad(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	h, err := wasm.NewHost(context.Background(), wasm.Config{
+		Store:  store,
+		Policy: policy.Default(),
+	})
+	if err != nil {
+		t.Fatalf("new host: %v", err)
+	}
+	defer func() { _ = h.Close(context.Background()) }()
+
+	// Minimal valid WASM binary (empty module).
+	wasmBytes := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	if err := h.LoadModuleFromBytes(context.Background(), "mod1", wasmBytes, "test"); err != nil {
+		t.Fatalf("load mod1: %v", err)
+	}
+
+	agg, perMod, limit := h.MemoryStats()
+	if agg == 0 {
+		t.Fatal("expected non-zero aggregate after loading module")
+	}
+	if _, ok := perMod["mod1"]; !ok {
+		t.Fatal("expected mod1 in per-module map")
+	}
+	if limit != wasm.DefaultAggregateMemoryLimitPages {
+		t.Fatalf("expected limit %d, got %d", wasm.DefaultAggregateMemoryLimitPages, limit)
+	}
+}
+
+func TestHost_AggregateMemoryLimit(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Set a very small aggregate limit (2 pages) to test enforcement.
+	h, err := wasm.NewHost(context.Background(), wasm.Config{
+		Store:                     store,
+		Policy:                    policy.Default(),
+		AggregateMemoryLimitPages: 2,
+	})
+	if err != nil {
+		t.Fatalf("new host: %v", err)
+	}
+	defer func() { _ = h.Close(context.Background()) }()
+
+	// Load first module — should succeed.
+	wasmBytes := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	if err := h.LoadModuleFromBytes(context.Background(), "first", wasmBytes, "test"); err != nil {
+		t.Fatalf("first load should succeed: %v", err)
+	}
+
+	// Load second module — should also succeed (2 pages limit, each minimal module uses 1 page).
+	if err := h.LoadModuleFromBytes(context.Background(), "second", wasmBytes, "test"); err != nil {
+		t.Fatalf("second load should succeed: %v", err)
+	}
+
+	// Load third module — should fail with memory exhausted.
+	err = h.LoadModuleFromBytes(context.Background(), "third", wasmBytes, "test")
+	if err == nil {
+		t.Fatal("expected error when exceeding aggregate memory limit")
+	}
+	var fault *wasm.SkillFault
+	if !errors.As(err, &fault) {
+		t.Fatalf("expected SkillFault, got %T: %v", err, err)
+	}
+	if fault.Reason != wasm.FaultMemoryExhausted {
+		t.Fatalf("expected reason %q, got %q", wasm.FaultMemoryExhausted, fault.Reason)
+	}
+	if !containsSubstring(fault.Detail, "WASM Host Memory Exhausted") {
+		t.Fatalf("expected detail to contain exhaustion message, got: %s", fault.Detail)
+	}
+}
+
+func TestHost_AggregateLimit_ReplaceDoesNotBlock(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Tight limit: 1 page.
+	h, err := wasm.NewHost(context.Background(), wasm.Config{
+		Store:                     store,
+		Policy:                    policy.Default(),
+		AggregateMemoryLimitPages: 1,
+	})
+	if err != nil {
+		t.Fatalf("new host: %v", err)
+	}
+	defer func() { _ = h.Close(context.Background()) }()
+
+	wasmBytes := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+
+	// Load module "a" — should succeed.
+	if err := h.LoadModuleFromBytes(context.Background(), "a", wasmBytes, "test"); err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+
+	// Replace module "a" with same name — should succeed (replaces, not adds).
+	if err := h.LoadModuleFromBytes(context.Background(), "a", wasmBytes, "test"); err != nil {
+		t.Fatalf("replacing same module should succeed: %v", err)
+	}
+
+	agg, perMod, _ := h.MemoryStats()
+	if len(perMod) != 1 {
+		t.Fatalf("expected 1 module, got %d", len(perMod))
+	}
+	if agg > 1 {
+		t.Fatalf("expected aggregate <= 1 page after replace, got %d", agg)
+	}
+}
+
+func TestHost_CustomAggregateLimit(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	h, err := wasm.NewHost(context.Background(), wasm.Config{
+		Store:                     store,
+		Policy:                    policy.Default(),
+		AggregateMemoryLimitPages: 100,
+	})
+	if err != nil {
+		t.Fatalf("new host: %v", err)
+	}
+	defer func() { _ = h.Close(context.Background()) }()
+
+	_, _, limit := h.MemoryStats()
+	if limit != 100 {
+		t.Fatalf("expected custom limit 100, got %d", limit)
+	}
+}

@@ -29,6 +29,12 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if len(req.Tools) > 0 {
+		s.openAIError(w, http.StatusBadRequest, "invalid_request_error",
+			"Tools are not supported in GoClaw v0.1. Function calling will be added in a future release.")
+		return
+	}
+
 	// 1. Route to agent by model prefix (needed before session ID generation).
 	agentID := "default"
 	if strings.HasPrefix(req.Model, "agent:") {
