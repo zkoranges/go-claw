@@ -331,6 +331,33 @@ func SetAPIKey(homeDir, name, value string) error {
 	return saveRawConfig(configPath, raw)
 }
 
+// AppendAgent adds an agent to config.yaml.
+// WARNING: Round-trips through yaml.Marshal — strips comments, may reorder fields.
+// TODO(v0.3): preserve user formatting via YAML-aware append.
+func AppendAgent(configPath string, agent AgentConfigEntry) error {
+	cfg := Config{}
+	data, err := os.ReadFile(configPath)
+	if err == nil && len(data) > 0 {
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return fmt.Errorf("parse config: %w", err)
+		}
+	}
+
+	// Check for duplicate ID
+	for _, existing := range cfg.Agents {
+		if existing.AgentID == agent.AgentID {
+			return fmt.Errorf("agent @%s already exists — use a different ID or remove the existing agent first", agent.AgentID)
+		}
+	}
+
+	cfg.Agents = append(cfg.Agents, agent)
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	return os.WriteFile(configPath, out, 0o644)
+}
+
 // Fingerprint returns a stable hash of the active config (GC-SPEC-CFG-005).
 func (c Config) Fingerprint() string {
 	h := fnv.New64a()

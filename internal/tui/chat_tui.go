@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -119,6 +120,7 @@ type chatModel struct {
 	mode          chatMode
 	selector      selectorModel
 	agentSelector agentSelectorModel
+	agentModal    AgentModal
 
 	input  []rune
 	cursor int // rune index within input
@@ -146,6 +148,7 @@ func newChatModel(ctx context.Context, cc ChatConfig, sessionID, agentPrefix, mo
 		modelName:   modelName,
 		mode:        chatModeChat,
 		plans:       &planTracker{executions: make(map[string]*PlanExecutionState)},
+		agentModal:  NewAgentModal(config.AvailableModels()),
 	}
 	// Subscribe to plan events from the event bus.
 	if cc.EventBus != nil {
@@ -222,7 +225,35 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.plans.cleanup()
 		return m, statusTickCmd()
 
+	case AgentCreatedMsg:
+		// Handle agent creation from modal
+		m.agentModal.Close()
+		m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Agent @%s created.", msg.ID)})
+		if msg.SaveToConfig && m.cc.HomeDir != "" {
+			configPath := filepath.Join(m.cc.HomeDir, "config.yaml")
+			entry := config.AgentConfigEntry{
+				AgentID:     msg.ID,
+				DisplayName: msg.ID,
+				Soul:        msg.Soul,
+			}
+			if err := config.AppendAgent(configPath, entry); err != nil {
+				m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Warning: could not persist to config: %v", err)})
+			}
+		}
+		return m, nil
+
+	case ModalCancelledMsg:
+		// Modal was cancelled
+		m.agentModal.Close()
+		return m, nil
+
 	case tea.KeyMsg:
+		// Modal intercepts all keys when open
+		if m.agentModal.IsOpen() {
+			cmd := m.agentModal.Update(msg)
+			return m, cmd
+		}
+
 		if m.mode == chatModeModelSelector {
 			updated, cmd := m.selector.Update(msg)
 			sm, ok := updated.(selectorModel)
@@ -306,6 +337,10 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "ctrl+d":
 			return m, tea.Quit
+
+		case "ctrl+n":
+			m.agentModal.Open()
+			return m, nil
 
 		case "enter", "ctrl+m", "ctrl+j":
 			if m.thinking {
@@ -439,7 +474,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "ctrl+p":
 			m = m.historyPrev()
 			return m, nil
-		case "down", "ctrl+n":
+		case "down":
 			m = m.historyNext()
 			return m, nil
 
@@ -605,6 +640,13 @@ func (m chatModel) View() string {
 
 	if m.mode == chatModePlanView {
 		b.WriteString(m.renderPlanView())
+		return b.String()
+	}
+
+	// Render modal if open (overlays on top of chat)
+	if m.agentModal.IsOpen() {
+		b.WriteString(m.agentModal.View())
+		b.WriteString("\n")
 		return b.String()
 	}
 
