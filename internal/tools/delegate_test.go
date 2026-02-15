@@ -111,7 +111,7 @@ func TestDelegateTask_InputValidation(t *testing.T) {
 		input DelegateTaskInput
 		want  string
 	}{
-		{"empty target", DelegateTaskInput{Prompt: "hi", SessionID: delegateTestSession}, "target_agent must be non-empty"},
+		{"empty target and capability", DelegateTaskInput{Prompt: "hi", SessionID: delegateTestSession}, "either target_agent or capability must be provided"},
 		{"empty prompt", DelegateTaskInput{TargetAgent: "b", SessionID: delegateTestSession}, "prompt must be non-empty"},
 		{"empty session", DelegateTaskInput{TargetAgent: "b", Prompt: "hi"}, "session_id must be non-empty"},
 	}

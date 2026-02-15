@@ -19,8 +19,11 @@ const capDelegateTask = "tools.delegate_task"
 
 // DelegateTaskInput is the input for the delegate_task tool.
 type DelegateTaskInput struct {
-	// TargetAgent is the agent to delegate the task to.
-	TargetAgent string `json:"target_agent"`
+	// TargetAgent is the agent to delegate the task to (either this or Capability must be provided).
+	TargetAgent string `json:"target_agent,omitempty"`
+	// Capability routes delegation to an agent with this capability if TargetAgent is not specified.
+	// GC-SPEC-PDR-v4-Phase-1: Capability-based agent routing.
+	Capability string `json:"capability,omitempty"`
 	// Prompt is what to ask the target agent.
 	Prompt string `json:"prompt"`
 	// SessionID is the session context for the delegated task.
@@ -62,8 +65,9 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 	audit.Record("allow", capDelegateTask, "capability_granted", pv, "delegate_task")
 
 	// Validate inputs.
-	if input.TargetAgent == "" {
-		return nil, fmt.Errorf("delegate_task: target_agent must be non-empty")
+	targetAgent := input.TargetAgent
+	if targetAgent == "" && input.Capability == "" {
+		return nil, fmt.Errorf("delegate_task: either target_agent or capability must be provided")
 	}
 	if input.Prompt == "" {
 		return nil, fmt.Errorf("delegate_task: prompt must be non-empty")
@@ -72,19 +76,38 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 		return nil, fmt.Errorf("delegate_task: session_id must be non-empty")
 	}
 
+	// If capability is specified without a specific agent, resolve it.
+	// GC-SPEC-PDR-v4-Phase-1: Capability-based agent routing.
+	if targetAgent == "" && input.Capability != "" {
+		// For now, find the first agent in the store with any matching pattern.
+		// In future, agents could declare their capabilities explicitly.
+		agents, err := store.ListAgents(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("delegate_task: list agents for capability %q: %w", input.Capability, err)
+		}
+		if len(agents) == 0 {
+			return nil, fmt.Errorf("delegate_task: no agents available for capability %q", input.Capability)
+		}
+		// Use the first agent (simplest routing for Phase 1).
+		// TODO: In future phases, agents will declare capabilities explicitly.
+		targetAgent = agents[0].AgentID
+		slog.Debug("delegate_task: resolved capability to agent",
+			"capability", input.Capability, "agent", targetAgent)
+	}
+
 	// Prevent self-delegation (would deadlock the calling agent's worker).
 	callerAgent := shared.AgentID(ctx)
-	if callerAgent != "" && callerAgent == input.TargetAgent {
+	if callerAgent != "" && callerAgent == targetAgent {
 		return nil, fmt.Errorf("delegate_task: cannot delegate to yourself (%q)", callerAgent)
 	}
 
 	// Validate target agent exists.
-	agent, err := store.GetAgent(ctx, input.TargetAgent)
+	agent, err := store.GetAgent(ctx, targetAgent)
 	if err != nil {
 		return nil, fmt.Errorf("delegate_task: check target agent: %w", err)
 	}
 	if agent == nil {
-		return nil, fmt.Errorf("delegate_task: target agent %q not found", input.TargetAgent)
+		return nil, fmt.Errorf("delegate_task: target agent %q not found", targetAgent)
 	}
 
 	timeout := time.Duration(input.TimeoutSec) * time.Second
@@ -107,14 +130,28 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 	}
 
 	// Create the task for the target agent.
-	taskID, err := store.CreateTaskForAgent(ctx, input.TargetAgent, input.SessionID, string(payload))
+	taskID, err := store.CreateTaskForAgent(ctx, targetAgent, input.SessionID, string(payload))
 	if err != nil {
 		return nil, fmt.Errorf("delegate_task: create task: %w", err)
 	}
 
+	// Set parent-child relationship for task tree.
+	// GC-SPEC-PDR-v4-Phase-1: Track delegation as task tree hierarchy.
+	callerTaskID := shared.TaskID(ctx)
+	if callerTaskID != "" {
+		// Best-effort: don't fail the delegation if this fails
+		if err := store.SetParentTask(ctx, taskID, callerTaskID); err != nil {
+			slog.Warn("delegate_task: failed to set parent task",
+				"child_task_id", taskID,
+				"parent_task_id", callerTaskID,
+				"error", err,
+			)
+		}
+	}
+
 	slog.Info("delegate_task: task created, waiting for result",
 		"task_id", taskID,
-		"target_agent", input.TargetAgent,
+		"target_agent", targetAgent,
 		"timeout", timeout,
 	)
 
@@ -146,7 +183,7 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 				return &DelegateTaskOutput{
 					TaskID: taskID,
 					Status: "FAILED",
-					Error:  fmt.Sprintf("timeout after %s waiting for agent %q", timeout, input.TargetAgent),
+					Error:  fmt.Sprintf("timeout after %s waiting for agent %q", timeout, targetAgent),
 				}, nil
 			}
 

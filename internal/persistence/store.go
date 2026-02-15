@@ -3497,6 +3497,60 @@ func (s *Store) SetParentTask(ctx context.Context, childTaskID, parentTaskID str
 	return nil
 }
 
+// SetTaskContext writes a key-value pair to the shared context for a task tree.
+// GC-SPEC-PDR-v4-Phase-1: Shared context for multi-agent task trees.
+func (s *Store) SetTaskContext(ctx context.Context, taskRootID, key, value string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO task_context (task_root_id, key, value)
+		VALUES (?, ?, ?)
+		ON CONFLICT(task_root_id, key) DO UPDATE SET value = excluded.value`,
+		taskRootID, key, value,
+	)
+	if err != nil {
+		return fmt.Errorf("set task context %s/%s: %w", taskRootID, key, err)
+	}
+	return nil
+}
+
+// GetTaskContext reads a value from the shared context for a task tree.
+// Returns empty string and no error if the key does not exist.
+// GC-SPEC-PDR-v4-Phase-1: Shared context for multi-agent task trees.
+func (s *Store) GetTaskContext(ctx context.Context, taskRootID, key string) (string, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT value FROM task_context WHERE task_root_id = ? AND key = ?`,
+		taskRootID, key,
+	).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get task context %s/%s: %w", taskRootID, key, err)
+	}
+	return value, nil
+}
+
+// GetAllTaskContext returns all key-value pairs for a task tree.
+// GC-SPEC-PDR-v4-Phase-1: Shared context for multi-agent task trees.
+func (s *Store) GetAllTaskContext(ctx context.Context, taskRootID string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT key, value FROM task_context WHERE task_root_id = ?`, taskRootID)
+	if err != nil {
+		return nil, fmt.Errorf("get all task context %s: %w", taskRootID, err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, fmt.Errorf("scan task context: %w", err)
+		}
+		result[k] = v
+	}
+	return result, rows.Err()
+}
+
 // TeamPlan represents a multi-agent workflow plan (PDR Phase 4).
 type TeamPlan struct {
 	ID                 string    `json:"id"`

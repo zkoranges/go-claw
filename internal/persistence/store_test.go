@@ -2915,3 +2915,154 @@ func TestStore_CheckToolCallDedup_HashMismatch(t *testing.T) {
 	}
 }
 
+// GC-SPEC-PDR-v4-Phase-1: Shared context for task trees.
+func TestSetGetTaskContext(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	// Create a task first (for foreign key constraint)
+	sessionID := "00000000-0000-0000-0000-000000000001"
+	if err := store.EnsureSession(ctx, sessionID); err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	taskID, err := store.CreateTask(ctx, sessionID, "test payload")
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	key := "research_topic"
+	value := "quantum computing"
+
+	// Set context
+	if err := store.SetTaskContext(ctx, taskID, key, value); err != nil {
+		t.Fatalf("set context: %v", err)
+	}
+
+	// Get context
+	got, err := store.GetTaskContext(ctx, taskID, key)
+	if err != nil {
+		t.Fatalf("get context: %v", err)
+	}
+	if got != value {
+		t.Fatalf("got %q, want %q", got, value)
+	}
+
+	// Overwrite same key
+	newValue := "machine learning"
+	if err := store.SetTaskContext(ctx, taskID, key, newValue); err != nil {
+		t.Fatalf("set context again: %v", err)
+	}
+
+	got, err = store.GetTaskContext(ctx, taskID, key)
+	if err != nil {
+		t.Fatalf("get context again: %v", err)
+	}
+	if got != newValue {
+		t.Fatalf("got %q, want %q", got, newValue)
+	}
+}
+
+// GC-SPEC-PDR-v4-Phase-1: Missing context key returns empty string.
+func TestGetTaskContext_NotFound(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	taskRootID := "root-task-456"
+	got, err := store.GetTaskContext(ctx, taskRootID, "nonexistent_key")
+	if err != nil {
+		t.Fatalf("get context: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want empty string", got)
+	}
+}
+
+// GC-SPEC-PDR-v4-Phase-1: GetAllTaskContext returns all key-value pairs.
+func TestGetAllTaskContext(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	// Create a task first
+	sessionID := "00000000-0000-0000-0000-000000000002"
+	if err := store.EnsureSession(ctx, sessionID); err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	taskID, err := store.CreateTask(ctx, sessionID, "test payload")
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	// Set 3 key-value pairs
+	keys := []string{"key1", "key2", "key3"}
+	values := []string{"val1", "val2", "val3"}
+	for i := 0; i < len(keys); i++ {
+		if err := store.SetTaskContext(ctx, taskID, keys[i], values[i]); err != nil {
+			t.Fatalf("set context: %v", err)
+		}
+	}
+
+	// Get all
+	all, err := store.GetAllTaskContext(ctx, taskID)
+	if err != nil {
+		t.Fatalf("get all context: %v", err)
+	}
+
+	// Verify
+	if len(all) != 3 {
+		t.Fatalf("got %d entries, want 3", len(all))
+	}
+	for i := 0; i < len(keys); i++ {
+		if got, ok := all[keys[i]]; !ok || got != values[i] {
+			t.Fatalf("missing or wrong value for %s", keys[i])
+		}
+	}
+}
+
+// GC-SPEC-PDR-v4-Phase-1: GetAllTaskContext isolation between task roots.
+func TestGetAllTaskContext_Isolated(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	// Create two tasks
+	sessionID := "00000000-0000-0000-0000-000000000003"
+	if err := store.EnsureSession(ctx, sessionID); err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	taskA, err := store.CreateTask(ctx, sessionID, "payload-a")
+	if err != nil {
+		t.Fatalf("create task A: %v", err)
+	}
+	taskB, err := store.CreateTask(ctx, sessionID, "payload-b")
+	if err != nil {
+		t.Fatalf("create task B: %v", err)
+	}
+
+	// Set context for task A
+	if err := store.SetTaskContext(ctx, taskA, "key", "value-a"); err != nil {
+		t.Fatalf("set context A: %v", err)
+	}
+
+	// Set context for task B
+	if err := store.SetTaskContext(ctx, taskB, "key", "value-b"); err != nil {
+		t.Fatalf("set context B: %v", err)
+	}
+
+	// Get all from A
+	allA, err := store.GetAllTaskContext(ctx, taskA)
+	if err != nil {
+		t.Fatalf("get all A: %v", err)
+	}
+	if len(allA) != 1 || allA["key"] != "value-a" {
+		t.Fatalf("A has wrong context: %v", allA)
+	}
+
+	// Get all from B
+	allB, err := store.GetAllTaskContext(ctx, taskB)
+	if err != nil {
+		t.Fatalf("get all B: %v", err)
+	}
+	if len(allB) != 1 || allB["key"] != "value-b" {
+		t.Fatalf("B has wrong context: %v", allB)
+	}
+}
+
