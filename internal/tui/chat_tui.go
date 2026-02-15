@@ -137,18 +137,22 @@ type chatModel struct {
 	// Plan execution tracking (GC-SPEC-PDR-v4-Phase-5).
 	plans   *planTracker
 	planSub *bus.Subscription
+
+	// Activity feed for task/delegation/plan events.
+	activityFeed *ActivityFeed
 }
 
 func newChatModel(ctx context.Context, cc ChatConfig, sessionID, agentPrefix, modelName string) chatModel {
 	m := chatModel{
-		ctx:         ctx,
-		cc:          cc,
-		sessionID:   sessionID,
-		agentPrefix: agentPrefix,
-		modelName:   modelName,
-		mode:        chatModeChat,
-		plans:       &planTracker{executions: make(map[string]*PlanExecutionState)},
-		agentModal:  NewAgentModal(config.AvailableModels()),
+		ctx:          ctx,
+		cc:           cc,
+		sessionID:    sessionID,
+		agentPrefix:  agentPrefix,
+		modelName:    modelName,
+		mode:         chatModeChat,
+		plans:        &planTracker{executions: make(map[string]*PlanExecutionState)},
+		agentModal:   NewAgentModal(config.AvailableModels()),
+		activityFeed: NewActivityFeed(),
 	}
 	// Subscribe to plan events from the event bus.
 	if cc.EventBus != nil {
@@ -511,7 +515,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Terminal mappings vary; Cmd+Backspace is commonly configured as ctrl+u (kill line) or ctrl+w (backward-kill-word).
 		case "ctrl+a":
-			m.cursor = 0
+			m.activityFeed.Toggle()
 			return m, nil
 		case "ctrl+e":
 			m.cursor = len(m.input)
@@ -624,7 +628,7 @@ func (m chatModel) View() string {
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("%s — %s\n", m.agentPrefix, m.modelName))
-	b.WriteString("Type a message. /help for commands, Ctrl+D or /quit to exit.\n")
+	b.WriteString("Type a message. /help for commands. @agent <msg> to mention agents. Ctrl+N to create agent. Ctrl+A to toggle activity.\n")
 	b.WriteString("\n")
 
 	if m.mode == chatModeModelSelector {
@@ -663,6 +667,9 @@ func (m chatModel) View() string {
 		b.WriteString(l)
 		b.WriteString("\n")
 	}
+
+	// Activity feed
+	b.WriteString(m.activityFeed.View())
 
 	// Input. Show current agent ID in prompt (e.g., "coder> " or "@coder> ").
 	b.WriteString("\n")

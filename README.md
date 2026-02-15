@@ -11,14 +11,11 @@ GoClaw is a single-binary daemon that queues agent tasks in SQLite, executes the
 
 ```
 $ goclaw
-GoClaw v0.1-dev | SQLite WAL | 3 workers | localhost:18789
-> research the mass of the sun and convert it to elephants
+GoClaw v0.2-dev | SQLite WAL | 3 workers | localhost:18789
+coder — gemini-2.5-pro
+> @coder implement a fibonacci function in Go
 [task queued] id=a1b2c3 status=QUEUED
-[brain] searching "mass of the sun"...
-[brain] The Sun's mass is ~1.989 × 10³⁰ kg. An average African elephant
-        weighs ~6,000 kg. That's approximately 3.3 × 10²⁶ elephants.
-> /status
-QUEUED: 0 | RUNNING: 0 | SUCCEEDED: 1 | FAILED: 0
+[coder] Here's a simple fibonacci function...
 ```
 
 ## Why
@@ -33,6 +30,9 @@ Most agent frameworks treat task execution as ephemeral — if the process dies,
 - **8-state task machine.** QUEUED → CLAIMED → RUNNING → SUCCEEDED/FAILED/RETRY_WAIT/CANCELED → DEAD_LETTER. Every transition is transactional with an append-only audit trail.
 - **Multi-provider LLM brain.** Gemini (default), Anthropic, OpenAI, OpenRouter — with automatic failover. Tool calls are schema-validated before execution. Switch providers at runtime via `/model`.
 - **Context compaction.** When conversation history approaches the context window, older messages are summarized via LLM and archived. Recent messages stay intact.
+- **@Mentions.** Route messages to specific agents with `@coder <msg>` syntax. Sticky agent switching with `@agent` shorthand.
+- **Starter agents.** Three built-in agents (coder, researcher, writer) available on first run. Create custom agents via Ctrl+N or pull from URLs with `goclaw pull`.
+- **Community agent library.** `goclaw pull <url>` fetches agent configs from any HTTPS URL, validates them, and adds to your local setup.
 
 ### Safety and control
 
@@ -88,7 +88,7 @@ goclaw              # interactive TUI
 goclaw --daemon     # headless, logs to stdout
 ```
 
-First run generates `config.yaml`, `policy.yaml`, `SOUL.md`, `auth.token`, and the SQLite database under `~/.goclaw`.
+First run generates `config.yaml`, `policy.yaml`, `SOUL.md`, `auth.token`, and the SQLite database under `~/.goclaw`. Three starter agents (coder, researcher, writer) are available immediately. Create new agents with Ctrl+N or pull from community URLs using `goclaw pull <url>`.
 
 ### Development
 

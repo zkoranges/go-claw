@@ -42,7 +42,7 @@ import (
 )
 
 // Version is set via ldflags at build time: -ldflags "-X main.Version=..."
-var Version = "dev"
+var Version = "v0.2-dev"
 
 func main() {
 	loadDotEnv(".env")
