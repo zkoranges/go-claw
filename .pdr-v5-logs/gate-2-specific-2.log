@@ -1,0 +1,6 @@
+[0;36m[PDR][0m Gate 2: Starter Agents...
+ok  	github.com/basket/go-claw/internal/config	0.218s
+[0;31m[FAIL][0m Starter 'coder' missing from config
+[0;31m[FAIL][0m Starter 'researcher' missing from config
+[0;31m[FAIL][0m Starter 'writer' missing from config
+[0;31m[FAIL][0m Gate 2: 3 failures

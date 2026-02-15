@@ -102,6 +102,7 @@ type AgentConfigEntry struct {
 	MaxQueueDepth      int      `yaml:"max_queue_depth"`
 	SkillsFilter       []string `yaml:"skills_filter"`
 	PreferredSearch    string   `yaml:"preferred_search"`
+	Capabilities       []string `yaml:"capabilities,omitempty"`
 }
 
 type Config struct {
@@ -436,6 +437,11 @@ func normalize(cfg *Config) {
 			p.APIKey = cfg.GeminiAPIKey
 			cfg.Providers["google"] = p
 		}
+	}
+
+	// Populate with starter agents on first run if no agents are configured
+	if len(cfg.Agents) == 0 {
+		cfg.Agents = StarterAgents()
 	}
 }
 

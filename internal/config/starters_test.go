@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestStarterAgents_Count(t *testing.T) {
 	agents := StarterAgents()
@@ -34,6 +37,9 @@ func TestStarterAgents_FieldsNonEmpty(t *testing.T) {
 		if a.Soul == "" {
 			t.Errorf("agent %s: empty Soul", a.AgentID)
 		}
+		if len(a.Capabilities) == 0 {
+			t.Errorf("agent %s: no capabilities", a.AgentID)
+		}
 	}
 }
 
@@ -44,5 +50,37 @@ func TestStarterAgents_UniqueIDs(t *testing.T) {
 			t.Errorf("duplicate agent ID: %q", a.AgentID)
 		}
 		seen[a.AgentID] = true
+	}
+}
+
+func TestLoad_PopulatesStarterAgentsWhenEmpty(t *testing.T) {
+	// Setup isolated home directory
+	tmpDir := t.TempDir()
+	oldGoclawHome := os.Getenv("GOCLAW_HOME")
+	defer os.Setenv("GOCLAW_HOME", oldGoclawHome)
+	os.Setenv("GOCLAW_HOME", tmpDir)
+
+	// Load config (should populate with starters since config.yaml doesn't exist)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	// Verify starter agents were populated
+	if len(cfg.Agents) != 3 {
+		t.Fatalf("expected 3 starter agents, got %d", len(cfg.Agents))
+	}
+
+	// Check IDs
+	agentIDs := map[string]bool{}
+	for _, a := range cfg.Agents {
+		agentIDs[a.AgentID] = true
+	}
+
+	expected := []string{"coder", "researcher", "writer"}
+	for _, id := range expected {
+		if !agentIDs[id] {
+			t.Errorf("missing starter agent: %s", id)
+		}
 	}
 }

@@ -38,6 +38,7 @@ import (
 	"github.com/basket/go-claw/internal/tui"
 	"github.com/google/uuid"
 	"github.com/mattn/go-isatty"
+	"gopkg.in/yaml.v3"
 )
 
 // Version is set via ldflags at build time: -ldflags "-X main.Version=..."
@@ -138,7 +139,16 @@ func main() {
 				logger.Info("genesis greeting", "message", greeting)
 			}
 		} else {
-			logger.Warn("config.yaml missing; run interactively for setup wizard")
+			// Fallback: write minimal config.yaml with starter agents in daemon mode
+			if err := writeMinimalConfig(cfg.HomeDir); err != nil {
+				fatalStartup(logger, "E_CONFIG_WRITE", err)
+			}
+			logger.Info("config.yaml written with starter agents", "home", cfg.HomeDir)
+			// Reload config
+			cfg, err = config.Load()
+			if err != nil {
+				fatalStartup(logger, "E_CONFIG_RELOAD", err)
+			}
 		}
 	}
 
@@ -1284,6 +1294,46 @@ func loadAuthToken(homeDir string) (string, error) {
 	}
 	slog.Info("auth.token generated", "path", tokenPath)
 	return token, nil
+}
+
+// writeMinimalConfig writes a minimal config.yaml with starter agents to disk.
+// Used as fallback when daemon mode is started without an existing config.yaml.
+func writeMinimalConfig(homeDir string) error {
+	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+		return fmt.Errorf("create home: %w", err)
+	}
+
+	// Create a config struct with defaults and starter agents
+	cfg := config.Config{
+		WorkerCount:              16,
+		TaskTimeoutSeconds:       int((10 * time.Minute).Seconds()),
+		BindAddr:                 "127.0.0.1:18789",
+		LogLevel:                 "info",
+		MaxQueueDepth:            100,
+		DrainTimeoutSeconds:      5,
+		RetentionTaskEventsDays:  90,
+		RetentionAuditLogDays:    365,
+		RetentionMessagesDays:    90,
+		HeartbeatIntervalMinutes: 30,
+		Skills: config.SkillsConfig{
+			ProjectDir: "./skills",
+		},
+		Agents: config.StarterAgents(), // Generate 3 starter agents
+	}
+
+	// Marshal to YAML
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	// Write to config.yaml
+	configPath := filepath.Join(homeDir, "config.yaml")
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		return fmt.Errorf("write config.yaml: %w", err)
+	}
+
+	return nil
 }
 
 type daemonSubcommandMode int
