@@ -773,7 +773,7 @@ func (pt *planTracker) handleEvent(event bus.Event) {
 	}
 
 	switch event.Topic {
-	case "plan.execution.started":
+	case bus.TopicPlanExecutionStarted:
 		execID, _ := payload["execution_id"].(string)
 		planName, _ := payload["plan_name"].(string)
 		totalSteps, _ := payload["total_steps"].(int)
@@ -788,7 +788,7 @@ func (pt *planTracker) handleEvent(event bus.Event) {
 			StartedAt:   time.Now(),
 		}
 
-	case "plan.execution.completed":
+	case bus.TopicPlanExecutionCompleted:
 		execID, _ := payload["execution_id"].(string)
 		status, _ := payload["status"].(string)
 		if execID == "" {

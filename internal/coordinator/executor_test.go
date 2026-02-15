@@ -240,8 +240,8 @@ verify:
 
 	// Verify event 1: plan.execution.started
 	startedEvent := events[0]
-	if startedEvent.Topic != "plan.execution.started" {
-		t.Fatalf("event 0 topic: got %q, want plan.execution.started", startedEvent.Topic)
+	if startedEvent.Topic != bus.TopicPlanExecutionStarted {
+		t.Fatalf("event 0 topic: got %q, want %s", startedEvent.Topic, bus.TopicPlanExecutionStarted)
 	}
 	startedPayload, ok := startedEvent.Payload.(map[string]interface{})
 	if !ok {
@@ -259,8 +259,8 @@ verify:
 
 	// Verify event 2: plan.execution.completed
 	completedEvent := events[1]
-	if completedEvent.Topic != "plan.execution.completed" {
-		t.Fatalf("event 1 topic: got %q, want plan.execution.completed", completedEvent.Topic)
+	if completedEvent.Topic != bus.TopicPlanExecutionCompleted {
+		t.Fatalf("event 1 topic: got %q, want %s", completedEvent.Topic, bus.TopicPlanExecutionCompleted)
 	}
 	completedPayload, ok := completedEvent.Payload.(map[string]interface{})
 	if !ok {

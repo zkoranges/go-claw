@@ -34,11 +34,10 @@ const (
 
 // Plan event topics.
 const (
-	TopicPlanStarted       = "plan.started"
-	TopicPlanStepStarted   = "plan.step.started"
-	TopicPlanStepCompleted = "plan.step.completed"
-	TopicPlanCompleted     = "plan.completed"
-	TopicPlanFailed        = "plan.failed"
+	TopicPlanExecutionStarted   = "plan.execution.started"
+	TopicPlanExecutionCompleted = "plan.execution.completed"
+	TopicPlanStepStarted        = "plan.step.started"
+	TopicPlanStepCompleted      = "plan.step.completed"
 )
 
 // TaskStateChangedEvent is published when a task's state changes.

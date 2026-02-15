@@ -54,7 +54,7 @@ func TestPlanTracker_HandleEvent(t *testing.T) {
 
 	// Simulate plan.execution.started event.
 	pt.handleEvent(bus.Event{
-		Topic: "plan.execution.started",
+		Topic: bus.TopicPlanExecutionStarted,
 		Payload: map[string]interface{}{
 			"execution_id": "exec-1",
 			"plan_name":    "deploy",
@@ -81,7 +81,7 @@ func TestPlanTracker_HandleEvent(t *testing.T) {
 
 	// Simulate plan.execution.completed event.
 	pt.handleEvent(bus.Event{
-		Topic: "plan.execution.completed",
+		Topic: bus.TopicPlanExecutionCompleted,
 		Payload: map[string]interface{}{
 			"execution_id": "exec-1",
 			"status":       "succeeded",

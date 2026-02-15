@@ -398,6 +398,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		{schemaVersionV9, schemaChecksumV9},
 		{schemaVersionV10, schemaChecksumV10},
 		{schemaVersionV11, schemaChecksumV11},
+		{schemaVersionV12, schemaChecksumV12},
 	}
 	matched := false
 	for _, vc := range versionChecksums {
@@ -417,14 +418,6 @@ func (s *Store) initSchema(ctx context.Context) error {
 	if !matched && maxVersion != 0 {
 		return fmt.Errorf("db schema version %d is older than supported minimum %d", maxVersion, schemaVersionV2)
 	}
-
-	// Append v12 checksum to versionChecksums for validation.
-	versionChecksums = append(versionChecksums,
-		struct {
-			version   int
-			checksum string
-		}{schemaVersionV12, schemaChecksumV12},
-	)
 
 	// Phase 1: Create tables (without indexes).
 	// Table names and columns aligned to SPEC Section 6.1.
@@ -760,9 +753,8 @@ func (s *Store) initSchema(ctx context.Context) error {
 		);`,
 	}
 	for _, stmt := range v12Statements {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "already exists") {
-			// Create tables if they don't exist, ignore "table already exists" errors
-			_, _ = tx.ExecContext(ctx, stmt)
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("exec v12 migration: %w", err)
 		}
 	}
 
@@ -3835,7 +3827,7 @@ func (s *Store) CreatePlanExecution(ctx context.Context, id, planName, sessionID
 	}
 
 	if s.bus != nil {
-		s.bus.Publish("plan.execution.started", map[string]interface{}{
+		s.bus.Publish(bus.TopicPlanExecutionStarted, map[string]interface{}{
 			"execution_id": id,
 			"plan_name":    planName,
 			"session_id":   sessionID,
@@ -3846,6 +3838,8 @@ func (s *Store) CreatePlanExecution(ctx context.Context, id, planName, sessionID
 }
 
 // CompletePlanExecution marks a plan execution as finished.
+// The totalCostUSD parameter is accepted for API compatibility but ignored;
+// actual cost is recalculated from plan_execution_steps for crash-recovery consistency.
 func (s *Store) CompletePlanExecution(ctx context.Context, id, status string, totalCostUSD float64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -3882,7 +3876,7 @@ func (s *Store) CompletePlanExecution(ctx context.Context, id, status string, to
 	}
 
 	if s.bus != nil {
-		s.bus.Publish("plan.execution.completed", map[string]interface{}{
+		s.bus.Publish(bus.TopicPlanExecutionCompleted, map[string]interface{}{
 			"execution_id": id,
 			"status":       status,
 			"cost":         actualCost,

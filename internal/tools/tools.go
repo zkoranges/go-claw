@@ -18,7 +18,7 @@ type Registry struct {
 	Providers            []SearchProvider   // Ordered by preference
 	ShellExecutor        Executor           // Optional override for shell execution
 	Store                *persistence.Store // Optional: enables spawn_task tool
-	DelegationMaxHops    int                // Max delegation chain depth (default 3)
+	DelegationMaxHops    int                // Max delegation chain depth (default 2)
 }
 
 // NewRegistry builds a Registry with providers ordered by preference.

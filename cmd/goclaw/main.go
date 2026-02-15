@@ -315,38 +315,14 @@ The system runs this checklist periodically to ensure health.
 	}
 
 	// Load plans from config (GC-SPEC-PDR-v4-Phase-4: Plan system).
-	planSummaries := make(map[string]gateway.PlanSummary)
-	plansMap := make(map[string]*coordinator.Plan)
-	if len(cfg.Plans) > 0 {
-		agentConfigs := registry.ListAgents()
-		agentIDs := make([]string, 0, len(agentConfigs))
-		for _, ac := range agentConfigs {
-			agentIDs = append(agentIDs, ac.AgentID)
-		}
-		plans, err := coordinator.LoadPlansFromConfig(cfg.Plans, agentIDs)
-		if err != nil {
-			logger.Warn("failed to load plans from config", "error", err)
-		} else {
-			for name, p := range plans {
-				planCopy := p  // avoid loop variable aliasing
-				plansMap[name] = &planCopy
-
-				agents := make(map[string]bool)
-				for _, s := range p.Steps {
-					agents[s.AgentID] = true
-				}
-				agentList := make([]string, 0, len(agents))
-				for a := range agents {
-					agentList = append(agentList, a)
-				}
-				planSummaries[name] = gateway.PlanSummary{
-					Name:      name,
-					StepCount: len(p.Steps),
-					AgentIDs:  agentList,
-				}
-			}
-			logger.Info("plans loaded from config", "count", len(planSummaries))
-		}
+	agentConfigs := registry.ListAgents()
+	agentIDs := make([]string, 0, len(agentConfigs))
+	for _, ac := range agentConfigs {
+		agentIDs = append(agentIDs, ac.AgentID)
+	}
+	planSummaries, plansMap := loadPlans(cfg.Plans, agentIDs, logger)
+	if len(planSummaries) > 0 {
+		logger.Info("plans loaded from config", "count", len(planSummaries))
 	}
 
 	// Configure shell executor (Host vs Docker)
@@ -715,43 +691,14 @@ The system runs this checklist periodically to ensure health.
 
 				// Reload plans from updated config.
 				// GC-SPEC-PDR-v4-Phase-4: Plan hot-reload on config change.
-				newPlanSummaries := make(map[string]gateway.PlanSummary)
-			newPlansMap := make(map[string]*coordinator.Plan)
-				if len(newCfg.Plans) > 0 {
-					agentConfigs := registry.ListAgents()
-					agentIDs := make([]string, 0, len(agentConfigs))
-					for _, ac := range agentConfigs {
-						agentIDs = append(agentIDs, ac.AgentID)
-					}
-					plans, err := coordinator.LoadPlansFromConfig(newCfg.Plans, agentIDs)
-					if err != nil {
-						logger.Warn("failed to reload plans from config", "error", err)
-					} else {
-						for name, p := range plans {
-						planCopy := p
-						newPlansMap[name] = &planCopy
-
-							agents := make(map[string]bool)
-							for _, s := range p.Steps {
-								agents[s.AgentID] = true
-							}
-							agentList := make([]string, 0, len(agents))
-							for a := range agents {
-								agentList = append(agentList, a)
-							}
-							newPlanSummaries[name] = gateway.PlanSummary{
-								Name:      name,
-								StepCount: len(p.Steps),
-								AgentIDs:  agentList,
-							}
-						}
-						planSummaries = newPlanSummaries
-						plansMap = newPlansMap
-						logger.Info("plans reloaded from config", "count", len(planSummaries))
-					}
-				} else {
-					planSummaries = newPlanSummaries
-					plansMap = newPlansMap
+				reloadAgentConfigs := registry.ListAgents()
+				reloadAgentIDs := make([]string, 0, len(reloadAgentConfigs))
+				for _, ac := range reloadAgentConfigs {
+					reloadAgentIDs = append(reloadAgentIDs, ac.AgentID)
+				}
+				planSummaries, plansMap = loadPlans(newCfg.Plans, reloadAgentIDs, logger)
+				if len(planSummaries) > 0 {
+					logger.Info("plans reloaded from config", "count", len(planSummaries))
 				}
 
 				// Update other config fields that may have changed.
@@ -1085,6 +1032,40 @@ func reconcileAgents(ctx context.Context, reg *agent.Registry,
 			}
 		}
 	}
+}
+
+// loadPlans converts config plan entries into summaries and full plan definitions.
+// It returns the loaded summaries and plan map, logging a warning on error.
+func loadPlans(planConfigs []config.PlanConfig, agentIDs []string, logger *slog.Logger) (map[string]gateway.PlanSummary, map[string]*coordinator.Plan) {
+	summaries := make(map[string]gateway.PlanSummary)
+	plansMap := make(map[string]*coordinator.Plan)
+	if len(planConfigs) == 0 {
+		return summaries, plansMap
+	}
+	plans, err := coordinator.LoadPlansFromConfig(planConfigs, agentIDs)
+	if err != nil {
+		logger.Warn("failed to load plans from config", "error", err)
+		return summaries, plansMap
+	}
+	for name, p := range plans {
+		planCopy := p
+		plansMap[name] = &planCopy
+
+		agents := make(map[string]bool)
+		for _, s := range p.Steps {
+			agents[s.AgentID] = true
+		}
+		agentList := make([]string, 0, len(agents))
+		for a := range agents {
+			agentList = append(agentList, a)
+		}
+		summaries[name] = gateway.PlanSummary{
+			Name:      name,
+			StepCount: len(p.Steps),
+			AgentIDs:  agentList,
+		}
+	}
+	return summaries, plansMap
 }
 
 // buildAgentConfig constructs an agent.AgentConfig from config.AgentConfigEntry.
