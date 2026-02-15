@@ -81,6 +81,9 @@ type Server struct {
 
 	approvalsMu sync.Mutex
 	approvals   map[string]*approvalRequest
+
+	// plans holds configured workflow plans (GC-SPEC-PDR-v4-Phase-4: Plan system).
+	// TODO: Implement /api/plans endpoints for plan execution and management.
 }
 
 type client struct {

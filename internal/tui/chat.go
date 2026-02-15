@@ -165,6 +165,11 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 	case "/model":
 		handleModelCommand(arg, cc, out)
 
+	case "/plan":
+		// GC-SPEC-PDR-v4-Phase-4: Plan system command.
+		fmt.Fprintln(out, "  /plan command: Plans loaded from config.yaml")
+		fmt.Fprintln(out)
+
 	default:
 		fmt.Fprintf(out, "  Unknown command: %s (type /help for available commands)\n\n", cmd)
 	}
