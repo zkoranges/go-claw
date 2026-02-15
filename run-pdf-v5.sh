@@ -133,52 +133,114 @@ log "Rollback all: git reset --hard $PRE_PDR_COMMIT"
 run_preflight() {
     hdr "GATHERING CODEBASE CONTEXT"
 
+    # Plain sequential commands — no associative arrays (macOS bash 3.x compat)
     {
         echo "=== PRE-FLIGHT OUTPUT — $(date) ==="
         echo ""
 
-        local -A sections=(
-            ["TUI Model Struct"]='grep -B2 -A30 "type Model struct\|type model struct" internal/tui/*.go'
-            ["TUI Update Function"]='grep -B2 -A30 "func.*Update.*tea.Msg\|func.*Update.*Msg" internal/tui/*.go | head -80'
-            ["TUI View Function"]='grep -B2 -A15 "func.*View()" internal/tui/*.go | head -40'
-            ["Input Handler"]='grep -B5 -A30 "KeyEnter\|Submit\|handleInput\|sendMessage\|processInput" internal/tui/*.go | head -80'
-            ["Command Dispatch"]="grep -B3 -A20 'strings.HasPrefix.*\"/\"\|handleCommand\|processCommand' internal/tui/*.go | head -80"
-            ["TUI Files"]='ls -la internal/tui/*.go'
-            ["TUI Constructor"]='grep -B5 -A20 "func New\|func InitialModel\|tui.New" internal/tui/*.go cmd/goclaw/main.go | head -50'
-            ["TUI Interfaces"]='grep -B2 -A10 "interface {" internal/tui/*.go'
-            ["Existing Modals"]='grep -rn "modal\|overlay\|popup\|dialog\|form" internal/tui/*.go | head -20'
-            ["Bubbletea Components"]='grep -n "textinput\|textarea\|list\|viewport\|spinner\|table" internal/tui/*.go | head -20'
-            ["Key Bindings"]='grep -n "KeyMap\|key.Binding\|KeyCtrl\|ctrl+" internal/tui/*.go | head -20'
-            ["Init Function"]='grep -B5 -A15 "func.*Init()" internal/tui/*.go | head -30'
-            ["AgentSwitcher"]='grep -B2 -A20 "AgentSwitcher" internal/tui/*.go | head -40'
-            ["SwitchAgent"]='grep -B5 -A20 "SwitchAgent\|switchAgent" internal/tui/*.go cmd/goclaw/main.go | head -40'
-            ["Active Agent Field"]='grep -n "activeAgent\|currentAgent\|agentID\|selectedAgent\|brain\|Brain" internal/tui/*.go | head -20'
-            ["tuiAgentSwitcher"]='grep -B5 -A40 "tuiAgentSwitcher" cmd/goclaw/main.go | head -60'
-            ["CreateAgent Signature"]='grep -B2 -A10 "func.*CreateAgent" cmd/goclaw/main.go internal/tui/*.go | head -20'
-            ["Message Sending Path"]='grep -B5 -A15 "CreateChatTask\|QueueTask\|sendChat\|submitMessage" internal/tui/*.go internal/engine/*.go | head -40'
-            ["Config Struct"]='grep -B2 -A40 "type Config struct" internal/config/config.go'
-            ["AgentConfigEntry"]='grep -B2 -A30 "type AgentConfigEntry struct\|type AgentEntry struct" internal/config/config.go'
-            ["Config Capabilities"]='grep -n "Capabilities\|capabilities" internal/config/config.go'
-            ["Config Load"]='grep -B2 -A10 "func Load\|func ReadConfig\|func ParseConfig" internal/config/config.go | head -20'
-            ["Config Write"]='grep -n "Marshal\|WriteFile\|SaveConfig\|writeConfig\|Save" internal/config/config.go | head -10'
-            ["First-Run Config"]='grep -B10 -A30 "initConfig\|generateDefault\|defaultConfig\|firstRun\|NotExist" internal/config/config.go cmd/goclaw/main.go | head -80'
-            ["YAML Tags"]='grep "yaml:" internal/config/config.go | head -20'
-            ["Agent Registry"]='grep -n "func.*Registry.*)" internal/agent/registry.go | head -20'
-            ["Bus Events Published"]="grep -rn 'Publish(' internal/ --include='*.go' | head -30"
-            ["Bus Subscribe"]='grep -B5 -A15 "func.*Subscribe" internal/bus/*.go'
-            ["Bus Event Types"]='grep -B2 -A10 "type Event struct\|type Message struct" internal/bus/*.go | head -20'
-            ["CLI Subcommands"]="grep -B10 -A25 'os.Args\|case.*\"doctor\"\|case.*\"daemon\"' cmd/goclaw/main.go | head -50"
-            ["Help Text"]='grep -B5 -A40 "helpText\|/help\|commandHelp\|availableCommands" internal/tui/*.go | head -80'
-            ["Error Display"]='grep -B5 -A10 "Error\|error\|errMsg\|ErrorMsg" internal/tui/*.go | head -30'
-            ["Model Strings"]="grep -rn 'gemini\|claude\|gpt-4\|model' internal/engine/brain*.go internal/config/config.go | grep -i 'string\|const\|default\|valid' | head -30"
-            ["Version String"]='grep -n "Version\|version" cmd/goclaw/main.go | head -5'
-        )
+        pf_section() { echo "=== $1 ==="; eval "$2" 2>/dev/null || echo "(not found)"; echo ""; }
 
-        for name in "${!sections[@]}"; do
-            echo "=== $name ==="
-            eval "${sections[$name]}" 2>/dev/null || echo "(not found)"
-            echo ""
-        done
+        pf_section "TUI Model Struct" \
+            'grep -B2 -A30 "type Model struct\|type model struct" internal/tui/*.go'
+
+        pf_section "TUI Update Function" \
+            'grep -B2 -A30 "func.*Update.*tea.Msg\|func.*Update.*Msg" internal/tui/*.go | head -80'
+
+        pf_section "TUI View Function" \
+            'grep -B2 -A15 "func.*View()" internal/tui/*.go | head -40'
+
+        pf_section "Input Handler" \
+            'grep -B5 -A30 "KeyEnter\|Submit\|handleInput\|sendMessage\|processInput" internal/tui/*.go | head -80'
+
+        pf_section "Command Dispatch" \
+            'grep -B3 -A20 "handleCommand\|processCommand" internal/tui/*.go | head -80'
+
+        pf_section "TUI Files" \
+            'ls -la internal/tui/*.go'
+
+        pf_section "TUI Constructor" \
+            'grep -B5 -A20 "func New\|func InitialModel\|tui.New" internal/tui/*.go cmd/goclaw/main.go | head -50'
+
+        pf_section "TUI Interfaces" \
+            'grep -B2 -A10 "interface {" internal/tui/*.go'
+
+        pf_section "Existing Modals" \
+            'grep -rn "modal\|overlay\|popup\|dialog\|form" internal/tui/*.go | head -20'
+
+        pf_section "Bubbletea Components" \
+            'grep -n "textinput\|textarea\|list\|viewport\|spinner\|table" internal/tui/*.go | head -20'
+
+        pf_section "Key Bindings" \
+            'grep -n "KeyMap\|key.Binding\|KeyCtrl\|ctrl+" internal/tui/*.go | head -20'
+
+        pf_section "Init Function" \
+            'grep -B5 -A15 "func.*Init()" internal/tui/*.go | head -30'
+
+        pf_section "AgentSwitcher" \
+            'grep -B2 -A20 "AgentSwitcher" internal/tui/*.go | head -40'
+
+        pf_section "SwitchAgent" \
+            'grep -B5 -A20 "SwitchAgent\|switchAgent" internal/tui/*.go cmd/goclaw/main.go | head -40'
+
+        pf_section "Active Agent Field" \
+            'grep -n "activeAgent\|currentAgent\|agentID\|selectedAgent\|brain\|Brain" internal/tui/*.go | head -20'
+
+        pf_section "tuiAgentSwitcher" \
+            'grep -B5 -A40 "tuiAgentSwitcher" cmd/goclaw/main.go | head -60'
+
+        pf_section "CreateAgent Signature" \
+            'grep -B2 -A10 "func.*CreateAgent" cmd/goclaw/main.go internal/tui/*.go | head -20'
+
+        pf_section "Message Sending Path" \
+            'grep -B5 -A15 "CreateChatTask\|QueueTask\|sendChat\|submitMessage" internal/tui/*.go internal/engine/*.go | head -40'
+
+        pf_section "Config Struct" \
+            'grep -B2 -A40 "type Config struct" internal/config/config.go'
+
+        pf_section "AgentConfigEntry" \
+            'grep -B2 -A30 "type AgentConfigEntry struct\|type AgentEntry struct" internal/config/config.go'
+
+        pf_section "Config Capabilities" \
+            'grep -n "Capabilities\|capabilities" internal/config/config.go'
+
+        pf_section "Config Load" \
+            'grep -B2 -A10 "func Load\|func ReadConfig\|func ParseConfig" internal/config/config.go | head -20'
+
+        pf_section "Config Write" \
+            'grep -n "Marshal\|WriteFile\|SaveConfig\|writeConfig\|Save" internal/config/config.go | head -10'
+
+        pf_section "First-Run Config" \
+            'grep -B10 -A30 "initConfig\|generateDefault\|defaultConfig\|firstRun\|NotExist" internal/config/config.go cmd/goclaw/main.go | head -80'
+
+        pf_section "YAML Tags" \
+            'grep "yaml:" internal/config/config.go | head -20'
+
+        pf_section "Agent Registry" \
+            'grep -n "func.*Registry.*)" internal/agent/registry.go | head -20'
+
+        pf_section "Bus Events Published" \
+            'grep -rn "Publish(" internal/ --include="*.go" | head -30'
+
+        pf_section "Bus Subscribe" \
+            'grep -B5 -A15 "func.*Subscribe" internal/bus/*.go'
+
+        pf_section "Bus Event Types" \
+            'grep -B2 -A10 "type Event struct\|type Message struct" internal/bus/*.go | head -20'
+
+        pf_section "CLI Subcommands" \
+            'grep -B10 -A25 "os.Args" cmd/goclaw/main.go | head -50'
+
+        pf_section "Help Text" \
+            'grep -B5 -A40 "helpText\|commandHelp\|availableCommands" internal/tui/*.go | head -80'
+
+        pf_section "Error Display" \
+            'grep -B5 -A10 "errMsg\|ErrorMsg\|showError" internal/tui/*.go | head -30'
+
+        pf_section "Model Strings" \
+            'grep -rn "gemini\|claude\|gpt-4" internal/engine/brain*.go internal/config/config.go | head -30'
+
+        pf_section "Version String" \
+            'grep -n "Version\|version" cmd/goclaw/main.go | head -5'
 
         echo "=== END PRE-FLIGHT ==="
     } > "$PREFLIGHT_CACHE"
