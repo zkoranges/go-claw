@@ -44,11 +44,53 @@ import (
 // Version is set via ldflags at build time: -ldflags "-X main.Version=..."
 var Version = "v0.2-dev"
 
+func printUsage() {
+	fmt.Fprintf(os.Stderr, `Usage of %s:
+
+INTERACTIVE MODE (default):
+  %s                          Start the interactive chat TUI
+
+DAEMON MODE:
+  %s -daemon                  Start daemon (no TUI, logs to stdout)
+  %s daemon start             Start daemon in background
+  %s daemon stop              Stop running daemon
+  %s daemon status            Check daemon status
+
+SUBCOMMANDS:
+  %s skill <action>           Manage WASM skills
+                              Actions: install, list, remove, update, info
+  %s status                   Show daemon health status (/healthz)
+  %s pull <url>               Fetch agents from HTTPS URL
+                              Example: goclaw pull https://example.com/agents.yaml
+  %s import [options]         Import legacy .env file to config.yaml
+                              Options: --path <file> (default: .env), --force
+  %s doctor [-json]           Run diagnostic checks
+                              Flags: -json for JSON output
+
+FLAGS:
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, `
+ENVIRONMENT VARIABLES:
+  GOCLAW_HOME             Data directory (default: ~/.goclaw)
+  GOCLAW_NO_TUI           Set to 1 to disable TUI (use with -daemon)
+  GEMINI_API_KEY          Required for Gemini provider
+
+EXAMPLES:
+  Interactive chat:       %s
+  Daemon mode:            %s -daemon
+  Install a skill:        %s skill install https://github.com/user/repo
+  Check daemon health:    %s status
+  Run diagnostics:        %s doctor
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0])
+}
+
 func main() {
 	loadDotEnv(".env")
 
 	interactive := isatty.IsTerminal(os.Stdout.Fd()) && os.Getenv("GOCLAW_NO_TUI") == ""
 	daemon := flag.Bool("daemon", false, "run in daemon mode (no chat REPL, logs to stdout)")
+	flag.Usage = printUsage
 	flag.Parse()
 
 	if *daemon {
@@ -64,6 +106,9 @@ func main() {
 	// CLI subcommands (non-daemon actions).
 	if args := flag.Args(); len(args) > 0 {
 		switch strings.ToLower(strings.TrimSpace(args[0])) {
+		case "help", "-h", "--help":
+			printUsage()
+			os.Exit(0)
 		case "skill":
 			os.Exit(runSkillCommand(ctx, args[1:]))
 		case "status":
