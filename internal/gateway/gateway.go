@@ -153,6 +153,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/sessions/", s.handleAPISessionMessages)
 	mux.HandleFunc("/api/skills", s.handleAPISkills)
 	mux.HandleFunc("/api/config", s.handleAPIConfig)
+	mux.HandleFunc("/api/plans", s.handleAPIPlans)
 
 	// OpenAI-compatible endpoints
 	mux.HandleFunc("/v1/chat/completions", s.handleOpenAIChatCompletion)
@@ -1602,4 +1603,20 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 		"config_hash":    s.cfg.ConfigFingerprint,
 		"policy_version": policyVersion,
 	})
+}
+
+// handleAPIPlans returns the list of configured plans (GC-SPEC-PDR-v4-Phase-4: Plan system).
+func (s *Server) handleAPIPlans(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorize(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	// TODO: Return actual plans once plans are passed to gateway.Config
+	// For now, return empty list to satisfy API contract
+	_ = json.NewEncoder(w).Encode(map[string]any{"plans": []any{}})
 }
