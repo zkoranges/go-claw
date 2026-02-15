@@ -2,7 +2,12 @@ package coordinator
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/basket/go-claw/internal/bus"
+	"github.com/basket/go-claw/internal/persistence"
 )
 
 // Mock router for testing.
@@ -167,5 +172,105 @@ func TestExecute_TestMode(t *testing.T) {
 		t.Fatal("expected step1 result")
 	} else if stepResult.Status != "RUNNING" {
 		t.Fatalf("expected RUNNING status in test mode, got %s", stepResult.Status)
+	}
+}
+
+// TestExecutor_Events verifies that plan execution publishes events to the event bus.
+// Events flow through Store.CreatePlanExecution and Store.CompletePlanExecution.
+// GC-SPEC-PDR-v4-Phase-4: Plan execution event integration test.
+func TestExecutor_Events(t *testing.T) {
+	// Create event bus and subscribe to plan events.
+	eventBus := bus.New()
+	sub := eventBus.Subscribe("plan.")
+	defer eventBus.Unsubscribe(sub)
+
+	// Create a real store (with bus) so CreatePlanExecution/CompletePlanExecution publish events.
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), eventBus)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	// Simple 1-step plan.
+	plan := &Plan{
+		Name: "event-test-plan",
+		Steps: []PlanStep{
+			{ID: "step1", AgentID: "default", Prompt: "echo test"},
+		},
+	}
+
+	// Executor with mock router and no waiter (test mode).
+	router := &mockRouter{}
+	exec := NewExecutor(router, nil, store)
+
+	// Ensure the session exists (plan_executions has FK on sessions).
+	sessionID := "7ced61c5-923f-41c2-ac40-d2137193a676"
+	if err := store.EnsureSession(context.Background(), sessionID); err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+
+	result, err := exec.Execute(context.Background(), plan, sessionID)
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ExecutionID == "" {
+		t.Fatal("expected non-empty execution ID")
+	}
+
+	// Collect events from subscription within timeout.
+	var events []bus.Event
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-sub.Ch():
+			events = append(events, ev)
+			// We expect exactly 2 events: started + completed.
+			if len(events) >= 2 {
+				goto verify
+			}
+		case <-timeout:
+			goto verify
+		}
+	}
+
+verify:
+	if len(events) < 2 {
+		t.Fatalf("expected at least 2 plan events, got %d", len(events))
+	}
+
+	// Verify event 1: plan.execution.started
+	startedEvent := events[0]
+	if startedEvent.Topic != "plan.execution.started" {
+		t.Fatalf("event 0 topic: got %q, want plan.execution.started", startedEvent.Topic)
+	}
+	startedPayload, ok := startedEvent.Payload.(map[string]interface{})
+	if !ok {
+		t.Fatalf("event 0 payload type: got %T, want map[string]interface{}", startedEvent.Payload)
+	}
+	if startedPayload["execution_id"] == nil || startedPayload["execution_id"].(string) == "" {
+		t.Fatal("started event missing execution_id")
+	}
+	if startedPayload["plan_name"] != "event-test-plan" {
+		t.Fatalf("started event plan_name: got %v, want event-test-plan", startedPayload["plan_name"])
+	}
+	if startedPayload["total_steps"] != 1 {
+		t.Fatalf("started event total_steps: got %v, want 1", startedPayload["total_steps"])
+	}
+
+	// Verify event 2: plan.execution.completed
+	completedEvent := events[1]
+	if completedEvent.Topic != "plan.execution.completed" {
+		t.Fatalf("event 1 topic: got %q, want plan.execution.completed", completedEvent.Topic)
+	}
+	completedPayload, ok := completedEvent.Payload.(map[string]interface{})
+	if !ok {
+		t.Fatalf("event 1 payload type: got %T, want map[string]interface{}", completedEvent.Payload)
+	}
+	if completedPayload["execution_id"] != startedPayload["execution_id"] {
+		t.Fatalf("completed execution_id %v != started execution_id %v",
+			completedPayload["execution_id"], startedPayload["execution_id"])
+	}
+	if completedPayload["status"] != "succeeded" {
+		t.Fatalf("completed status: got %v, want succeeded", completedPayload["status"])
 	}
 }

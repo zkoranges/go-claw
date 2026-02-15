@@ -165,6 +165,25 @@ func main() {
 		"tasks_recovered", recMetrics.RecoveredCount,
 		"recovery_duration_ms", recMetrics.RecoveryDuration.Milliseconds())
 
+	// Recover crashed plan executions.
+	// GC-SPEC-PDR-v4-Phase-1: Crash resilience via plan persistence.
+	recoveries, err := store.RecoverRunningPlans(ctx)
+	if err != nil {
+		logger.Warn("failed to query running plans for crash recovery", "error", err)
+	} else if len(recoveries) > 0 {
+		logger.Warn("found crashed plan executions at startup", "count", len(recoveries))
+		for _, rec := range recoveries {
+			if err := store.CompletePlanExecution(ctx, rec.ID, "failed", 0); err != nil {
+				logger.Warn("failed to mark crashed plan as failed", "exec_id", rec.ID, "error", err)
+			} else {
+				logger.Info("marked crashed plan as failed on restart",
+					"exec_id", rec.ID,
+					"plan_name", rec.PlanName,
+					"progress", fmt.Sprintf("%d/%d steps", rec.CompletedSteps, rec.TotalSteps))
+			}
+		}
+	}
+
 	policyPath := filepath.Join(cfg.HomeDir, "policy.yaml")
 	if _, statErr := os.Stat(policyPath); os.IsNotExist(statErr) {
 		if writeErr := os.WriteFile(policyPath, []byte(tui.DefaultPolicyYAML()), 0o644); writeErr != nil {
@@ -297,6 +316,7 @@ The system runs this checklist periodically to ensure health.
 
 	// Load plans from config (GC-SPEC-PDR-v4-Phase-4: Plan system).
 	planSummaries := make(map[string]gateway.PlanSummary)
+	plansMap := make(map[string]*coordinator.Plan)
 	if len(cfg.Plans) > 0 {
 		agentConfigs := registry.ListAgents()
 		agentIDs := make([]string, 0, len(agentConfigs))
@@ -308,6 +328,9 @@ The system runs this checklist periodically to ensure health.
 			logger.Warn("failed to load plans from config", "error", err)
 		} else {
 			for name, p := range plans {
+				planCopy := p  // avoid loop variable aliasing
+				plansMap[name] = &planCopy
+
 				agents := make(map[string]bool)
 				for _, s := range p.Steps {
 					agents[s.AgentID] = true
@@ -367,13 +390,17 @@ The system runs this checklist periodically to ensure health.
 	}
 	defer func() { _ = mcpManager.Stop() }()
 
-	// Register MCP tools on all agents.
+	// Register MCP tools on all agents and set delegation config.
 	for _, ra := range registry.ListRunningAgents() {
 		if ra.Brain != nil && ra.Brain.Genkit() != nil {
 			mcpTools := tools.RegisterMCPTools(ra.Brain.Genkit(), ra.Brain.Registry(), mcpManager)
 			if len(mcpTools) > 0 {
 				ra.Brain.Registry().Tools = append(ra.Brain.Registry().Tools, mcpTools...)
 			}
+		}
+		// Set delegation max hops from config.
+		if ra.Brain != nil && cfg.DelegationMaxHops > 0 {
+			ra.Brain.Registry().DelegationMaxHops = cfg.DelegationMaxHops
 		}
 	}
 
@@ -627,6 +654,11 @@ The system runs this checklist periodically to ensure health.
 			}
 		}
 
+		// Delegation max hops from config.
+		if cfg.DelegationMaxHops > 0 {
+			ra.Brain.Registry().DelegationMaxHops = cfg.DelegationMaxHops
+		}
+
 		logger.Info("runtime agent provisioned with skills/tools", "agent_id", ra.Config.AgentID)
 	})
 
@@ -669,6 +701,69 @@ The system runs this checklist periodically to ensure health.
 					_ = store.RecordPolicyVersion(context.Background(), newVer, newVer, ev.Path)
 					logger.Info("policy.yaml hot-reloaded", "policy_version", newVer)
 				}
+			case "config.yaml":
+				newCfg, err := config.Load()
+				if err != nil {
+					logger.Error("config.yaml reload failed", "error", err)
+					break
+				}
+
+				// Reconcile agents (add new, remove deleted, recreate changed ones).
+				// GC-SPEC-CFR-004: Agent hot-reload on config change.
+				reconcileAgents(ctx, registry, newCfg.Agents, cfg.Agents, cfg.HomeDir, logger)
+				cfg.Agents = newCfg.Agents
+
+				// Reload plans from updated config.
+				// GC-SPEC-PDR-v4-Phase-4: Plan hot-reload on config change.
+				newPlanSummaries := make(map[string]gateway.PlanSummary)
+			newPlansMap := make(map[string]*coordinator.Plan)
+				if len(newCfg.Plans) > 0 {
+					agentConfigs := registry.ListAgents()
+					agentIDs := make([]string, 0, len(agentConfigs))
+					for _, ac := range agentConfigs {
+						agentIDs = append(agentIDs, ac.AgentID)
+					}
+					plans, err := coordinator.LoadPlansFromConfig(newCfg.Plans, agentIDs)
+					if err != nil {
+						logger.Warn("failed to reload plans from config", "error", err)
+					} else {
+						for name, p := range plans {
+						planCopy := p
+						newPlansMap[name] = &planCopy
+
+							agents := make(map[string]bool)
+							for _, s := range p.Steps {
+								agents[s.AgentID] = true
+							}
+							agentList := make([]string, 0, len(agents))
+							for a := range agents {
+								agentList = append(agentList, a)
+							}
+							newPlanSummaries[name] = gateway.PlanSummary{
+								Name:      name,
+								StepCount: len(p.Steps),
+								AgentIDs:  agentList,
+							}
+						}
+						planSummaries = newPlanSummaries
+						plansMap = newPlansMap
+						logger.Info("plans reloaded from config", "count", len(planSummaries))
+					}
+				} else {
+					planSummaries = newPlanSummaries
+					plansMap = newPlansMap
+				}
+
+				// Update other config fields that may have changed.
+				if newCfg.DelegationMaxHops > 0 {
+					for _, ra := range registry.ListRunningAgents() {
+						if ra.Brain != nil && ra.Brain.Registry() != nil {
+							ra.Brain.Registry().DelegationMaxHops = newCfg.DelegationMaxHops
+						}
+					}
+				}
+
+				logger.Info("config.yaml hot-reloaded")
 			}
 		}
 	}()
@@ -791,10 +886,15 @@ The system runs this checklist periodically to ensure health.
 		}
 	}()
 
+	// Create plan executor (GC-SPEC-PDR-v4-Phase-4: Plan execution engine).
+	waiter := coordinator.NewWaiter(eventBus, store)
+	executor := coordinator.NewExecutor(registry, waiter, store)
+
 	gw := gateway.New(gateway.Config{
 		Store:             store,
 		Registry:          registry,
 		Policy:            pol,
+		Bus:               eventBus,
 		AuthToken:         authToken,
 		AllowOrigins:      cfg.AllowOrigins,
 		ConfigFingerprint: cfg.Fingerprint(),
@@ -802,6 +902,8 @@ The system runs this checklist periodically to ensure health.
 		TinygoStatus:      wasmWatcher.TinygoStatus,
 		SkillsStatus:      skillsStatusFn,
 		Plans:             planSummaries,
+		PlansMap:          plansMap,
+		Executor:          executor,
 	})
 
 	server := &http.Server{
@@ -914,6 +1016,7 @@ The system runs this checklist periodically to ensure health.
 				AgentEmoji:   cfg.AgentEmoji,
 				Switcher:     &tuiAgentSwitcher{reg: registry},
 				CurrentAgent: "default",
+				EventBus:     eventBus,
 			}); err != nil && ctx.Err() == nil {
 				logger.Error("chat exited with error", "error", err)
 			}

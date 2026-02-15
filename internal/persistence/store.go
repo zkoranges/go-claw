@@ -63,8 +63,12 @@ const (
 	schemaVersionV11  = 11
 	schemaChecksumV11 = "gc-v11-2026-02-15-experiments-analytics"
 
-	schemaVersionLatest  = schemaVersionV11
-	schemaChecksumLatest = schemaChecksumV11
+	// v0.1.5 schema v12: adds plan_executions tables for crash recovery (Stabilization Sprint Phase 1).
+	schemaVersionV12  = 12
+	schemaChecksumV12 = "gc-v12-2026-02-15-plan-persistence"
+
+	schemaVersionLatest  = schemaVersionV12
+	schemaChecksumLatest = schemaChecksumV12
 
 	defaultLeaseDuration = 30 * time.Second
 
@@ -414,6 +418,14 @@ func (s *Store) initSchema(ctx context.Context) error {
 		return fmt.Errorf("db schema version %d is older than supported minimum %d", maxVersion, schemaVersionV2)
 	}
 
+	// Append v12 checksum to versionChecksums for validation.
+	versionChecksums = append(versionChecksums,
+		struct {
+			version   int
+			checksum string
+		}{schemaVersionV12, schemaChecksumV12},
+	)
+
 	// Phase 1: Create tables (without indexes).
 	// Table names and columns aligned to SPEC Section 6.1.
 	tableStatements := []string{
@@ -714,6 +726,46 @@ func (s *Store) initSchema(ctx context.Context) error {
 		}
 	}
 
+	// v12: Plan executions for crash recovery.
+	v12Statements := []string{
+		`CREATE TABLE IF NOT EXISTS plan_executions (
+			id TEXT PRIMARY KEY,
+			plan_name TEXT NOT NULL,
+			session_id TEXT NOT NULL REFERENCES sessions(id),
+			status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'failed', 'canceled')) DEFAULT 'running',
+			total_steps INTEGER NOT NULL,
+			completed_steps INTEGER NOT NULL DEFAULT 0,
+			current_wave INTEGER NOT NULL DEFAULT 0,
+			total_cost_usd REAL NOT NULL DEFAULT 0.0,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			completed_at TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE TABLE IF NOT EXISTS plan_execution_steps (
+			id TEXT PRIMARY KEY,
+			execution_id TEXT NOT NULL REFERENCES plan_executions(id) ON DELETE CASCADE,
+			step_id TEXT NOT NULL,
+			step_index INTEGER NOT NULL,
+			wave_number INTEGER NOT NULL,
+			agent_id TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+			status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'succeeded', 'failed')) DEFAULT 'pending',
+			result TEXT,
+			error TEXT,
+			cost_usd REAL NOT NULL DEFAULT 0.0,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			completed_at TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
+	}
+	for _, stmt := range v12Statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "already exists") {
+			// Create tables if they don't exist, ignore "table already exists" errors
+			_, _ = tx.ExecContext(ctx, stmt)
+		}
+	}
+
 	// Phase 3: Indexes (may reference columns added by backfills).
 	indexStatements := []string{
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`,
@@ -742,6 +794,12 @@ func (s *Store) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_experiments_status ON experiments(status, created_at DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_experiment_samples_experiment ON experiment_samples(experiment_id, variant);`,
 		`CREATE INDEX IF NOT EXISTS idx_experiment_samples_task ON experiment_samples(task_id);`,
+		// v12: Indexes for plan executions
+		`CREATE INDEX IF NOT EXISTS idx_plan_executions_session ON plan_executions(session_id, created_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_executions_status ON plan_executions(status, updated_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_steps_execution ON plan_execution_steps(execution_id, step_index);`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_steps_wave ON plan_execution_steps(execution_id, wave_number, status);`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_steps_task ON plan_execution_steps(task_id);`,
 	}
 
 	for _, stmt := range indexStatements {
@@ -3756,15 +3814,164 @@ type PlanExecution struct {
 }
 
 // CreatePlanExecution records the start of a plan execution.
-// TODO: Implement with plan_executions table once v12 schema is available.
 func (s *Store) CreatePlanExecution(ctx context.Context, id, planName, sessionID string, totalSteps int) error {
-	// Stub implementation - no-op for now
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO plan_executions (id, plan_name, session_id, status, total_steps, created_at, updated_at)
+		VALUES (?, ?, ?, 'running', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		id, planName, sessionID, totalSteps,
+	)
+	if err != nil {
+		return fmt.Errorf("insert plan_execution: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	if s.bus != nil {
+		s.bus.Publish("plan.execution.started", map[string]interface{}{
+			"execution_id": id,
+			"plan_name":    planName,
+			"session_id":   sessionID,
+			"total_steps":  totalSteps,
+		})
+	}
 	return nil
 }
 
 // CompletePlanExecution marks a plan execution as finished.
-// TODO: Implement with plan_executions table once v12 schema is available.
 func (s *Store) CompletePlanExecution(ctx context.Context, id, status string, totalCostUSD float64) error {
-	// Stub implementation - no-op for now
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Calculate total cost from steps for consistency (handles crash recovery).
+	var actualCost float64
+	err = tx.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(cost_usd), 0) FROM plan_execution_steps WHERE execution_id = ?`,
+		id,
+	).Scan(&actualCost)
+	if err != nil {
+		return fmt.Errorf("calculate cost: %w", err)
+	}
+
+	res, err := tx.ExecContext(ctx, `
+		UPDATE plan_executions
+		SET status = ?, total_cost_usd = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`,
+		status, actualCost, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update: %w", err)
+	}
+
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return fmt.Errorf("plan_execution %s not found", id)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	if s.bus != nil {
+		s.bus.Publish("plan.execution.completed", map[string]interface{}{
+			"execution_id": id,
+			"status":       status,
+			"cost":         actualCost,
+		})
+	}
 	return nil
+}
+
+// RecoverRunningPlans finds plans in 'running' state for crash recovery.
+func (s *Store) RecoverRunningPlans(ctx context.Context) ([]PlanExecutionRecovery, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, plan_name, session_id, current_wave, completed_steps, total_steps
+		FROM plan_executions
+		WHERE status = 'running'
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var recoveries []PlanExecutionRecovery
+	for rows.Next() {
+		var r PlanExecutionRecovery
+		if err := rows.Scan(&r.ID, &r.PlanName, &r.SessionID, &r.CurrentWave, &r.CompletedSteps, &r.TotalSteps); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		recoveries = append(recoveries, r)
+	}
+	return recoveries, rows.Err()
+}
+
+// RecordStepComplete updates step status and increments completed_steps.
+func (s *Store) RecordStepComplete(ctx context.Context, execID, stepID, status, result, errMsg string, costUSD float64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `
+		UPDATE plan_execution_steps
+		SET status = ?, result = ?, error = ?, cost_usd = ?, completed_at = CURRENT_TIMESTAMP
+		WHERE execution_id = ? AND step_id = ?`,
+		status, result, errMsg, costUSD, execID, stepID,
+	)
+	if err != nil {
+		return fmt.Errorf("update step: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		UPDATE plan_executions
+		SET completed_steps = completed_steps + 1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`,
+		execID,
+	)
+	if err != nil {
+		return fmt.Errorf("increment completed_steps: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// Bus returns the event bus for publishing.
+func (s *Store) Bus() *bus.Bus {
+	return s.bus
+}
+
+// PlanExecutionRecovery holds data to resume crashed plans.
+type PlanExecutionRecovery struct {
+	ID             string
+	PlanName       string
+	SessionID      string
+	CurrentWave    int
+	CompletedSteps int
+	TotalSteps     int
+}
+
+// PlanExecutionStep represents a single step in a plan execution.
+type PlanExecutionStep struct {
+	ID         string
+	StepID     string
+	StepIndex  int
+	WaveNumber int
+	AgentID    string
+	Prompt     string
+	TaskID     string
+	Status     string
+	Result     string
+	Error      string
+	CostUSD    float64
 }

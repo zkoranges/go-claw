@@ -1,8 +1,10 @@
 package bus
 
 import (
+	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 const defaultBufferSize = 100
@@ -21,6 +23,22 @@ const (
 	TopicTaskCompleted     = "task.completed"
 	TopicTaskFailed        = "task.failed"
 	TopicTaskRetrying      = "task.retrying"
+)
+
+// Delegation event topics.
+const (
+	TopicDelegationStarted   = "delegation.started"
+	TopicDelegationCompleted = "delegation.completed"
+	TopicDelegationFailed    = "delegation.failed"
+)
+
+// Plan event topics.
+const (
+	TopicPlanStarted       = "plan.started"
+	TopicPlanStepStarted   = "plan.step.started"
+	TopicPlanStepCompleted = "plan.step.completed"
+	TopicPlanCompleted     = "plan.completed"
+	TopicPlanFailed        = "plan.failed"
 )
 
 // TaskStateChangedEvent is published when a task's state changes.
@@ -61,15 +79,23 @@ func (s *Subscription) Ch() <-chan Event {
 
 // Bus is a simple in-process pub/sub message bus with topic prefix matching.
 type Bus struct {
-	mu     sync.RWMutex
-	subs   map[int]*Subscription
-	nextID int
+	mu             sync.RWMutex
+	subs           map[int]*Subscription
+	nextID         int
+	logger         *slog.Logger
+	droppedEvents  atomic.Int64
 }
 
 // New creates a new Bus.
 func New() *Bus {
+	return NewWithLogger(nil)
+}
+
+// NewWithLogger creates a new Bus with an optional logger for observability.
+func NewWithLogger(logger *slog.Logger) *Bus {
 	return &Bus{
-		subs: make(map[int]*Subscription),
+		subs:   make(map[int]*Subscription),
+		logger: logger,
 	}
 }
 
@@ -122,7 +148,8 @@ func (b *Bus) Publish(topic string, payload interface{}) {
 			select {
 			case sub.ch <- event:
 			default:
-				// Buffer full, drop event for this subscriber.
+				// Buffer full - increment counter instead of logging per-drop (avoid I/O spike).
+				b.droppedEvents.Add(1)
 			}
 		}
 	}
@@ -133,4 +160,9 @@ func (b *Bus) SubscriberCount() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return len(b.subs)
+}
+
+// DroppedEventCount returns the total number of events dropped due to full buffers.
+func (b *Bus) DroppedEventCount() int64 {
+	return b.droppedEvents.Load()
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/basket/go-claw/internal/audit"
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/coordinator"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
@@ -51,7 +52,7 @@ type chatPayload struct {
 }
 
 // delegateTask creates a task for the target agent and blocks until it completes.
-func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persistence.Store, pol policy.Checker) (*DelegateTaskOutput, error) {
+func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persistence.Store, pol policy.Checker, maxHops int) (*DelegateTaskOutput, error) {
 	// Policy check.
 	if pol == nil || !pol.AllowCapability(capDelegateTask) {
 		pv := ""
@@ -102,6 +103,12 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 		return nil, fmt.Errorf("delegate_task: cannot delegate to yourself (%q)", callerAgent)
 	}
 
+	// Check delegation hop limit to prevent infinite chains.
+	currentHop := shared.DelegationHop(ctx)
+	if currentHop >= maxHops {
+		return nil, fmt.Errorf("delegate_task: max delegation depth exceeded (%d hops)", maxHops)
+	}
+
 	// Validate target agent exists.
 	agent, err := store.GetAgent(ctx, targetAgent)
 	if err != nil {
@@ -124,6 +131,10 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 		return nil, fmt.Errorf("delegate_task: ensure session: %w", err)
 	}
 
+	// Get caller task ID early (before creating child task).
+	// GC-SPEC-PDR-v4-Phase-1: Track delegation as task tree hierarchy.
+	callerTaskID := shared.TaskID(ctx)
+
 	// Wrap prompt in chatTaskPayload JSON so the engine's EchoProcessor can decode it.
 	payload, err := json.Marshal(chatPayload{Content: input.Prompt})
 	if err != nil {
@@ -136,9 +147,17 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 		return nil, fmt.Errorf("delegate_task: create task: %w", err)
 	}
 
+	// Publish delegation started event.
+	if store.Bus() != nil {
+		store.Bus().Publish(bus.TopicDelegationStarted, map[string]interface{}{
+			"parent_task_id": callerTaskID,
+			"child_task_id":  taskID,
+			"target_agent":   targetAgent,
+			"hop_count":      currentHop,
+		})
+	}
+
 	// Set parent-child relationship for task tree.
-	// GC-SPEC-PDR-v4-Phase-1: Track delegation as task tree hierarchy.
-	callerTaskID := shared.TaskID(ctx)
 	if callerTaskID != "" {
 		// Best-effort: don't fail the delegation if this fails
 		if err := store.SetParentTask(ctx, taskID, callerTaskID); err != nil {
@@ -160,7 +179,9 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 	// GC-SPEC-PDR-v4-Phase-2: Event-driven task completion tracking.
 	// GC-SPEC-PDR-v4-Phase-5: Publish delegation events for TUI visibility.
 	waiter := coordinator.NewWaiter(nil, store) // nil bus means polling-only mode
-	result, err := waiter.WaitForTask(ctx, taskID, timeout)
+	// Pass incremented hop count to child task context
+	childCtx := shared.WithDelegationHop(ctx, currentHop+1)
+	result, err := waiter.WaitForTask(childCtx, taskID, timeout)
 	if err != nil {
 		// Abort the child task on error so it doesn't run orphaned.
 		if _, abortErr := store.AbortTask(context.Background(), taskID); abortErr != nil {
@@ -182,6 +203,14 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 		return nil, err
 	}
 
+	// Publish delegation completed event.
+	if store.Bus() != nil {
+		store.Bus().Publish(bus.TopicDelegationCompleted, map[string]interface{}{
+			"child_task_id": taskID,
+			"status":        result.Status,
+		})
+	}
+
 	return &DelegateTaskOutput{
 		TaskID: result.TaskID,
 		Status: result.Status,
@@ -194,7 +223,11 @@ func registerDelegate(g *genkit.Genkit, reg *Registry) ai.ToolRef {
 	return genkit.DefineTool(g, "delegate_task",
 		"Delegate a task to another agent and wait for its result. The calling agent's turn pauses until the target agent completes. Requires tools.delegate_task capability.",
 		func(ctx *ai.ToolContext, input DelegateTaskInput) (DelegateTaskOutput, error) {
-			out, err := delegateTask(ctx, &input, reg.Store, reg.Policy)
+			maxHops := reg.DelegationMaxHops
+			if maxHops <= 0 {
+				maxHops = 2 // Fallback default
+			}
+			out, err := delegateTask(ctx, &input, reg.Store, reg.Policy, maxHops)
 			if err != nil {
 				return DelegateTaskOutput{}, err
 			}

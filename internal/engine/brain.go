@@ -892,7 +892,18 @@ func (b *GenkitBrain) ensureSkillInstructionsLoaded(ctx context.Context, key str
 		return fmt.Errorf("skill %s missing SourceDir", key)
 	}
 
-	data, err := os.ReadFile(filepath.Join(sourceDir, "SKILL.md"))
+	// Check file size before reading (prevent DoS via large SKILL.md).
+	skillPath := filepath.Join(sourceDir, "SKILL.md")
+	stat, err := os.Stat(skillPath)
+	if err != nil {
+		return fmt.Errorf("stat SKILL.md: %w", err)
+	}
+	const maxSkillMDSize = 1 << 20 // 1 MiB (matches skills/loader.go)
+	if stat.Size() > maxSkillMDSize {
+		return fmt.Errorf("SKILL.md too large: %d bytes (max %d)", stat.Size(), maxSkillMDSize)
+	}
+
+	data, err := os.ReadFile(skillPath)
 	if err != nil {
 		return fmt.Errorf("read SKILL.md: %w", err)
 	}

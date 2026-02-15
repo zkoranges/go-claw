@@ -61,7 +61,7 @@ func TestDelegateTask_PolicyDeny(t *testing.T) {
 		TargetAgent: "agent-b",
 		Prompt:      "hello",
 		SessionID:   delegateTestSession,
-	}, store, pol)
+	}, store, pol, 2)
 
 	if err == nil || !strings.Contains(err.Error(), "policy denied") {
 		t.Fatalf("expected policy denial, got err=%v", err)
@@ -76,7 +76,7 @@ func TestDelegateTask_NilPolicyDeny(t *testing.T) {
 		TargetAgent: "agent-b",
 		Prompt:      "hello",
 		SessionID:   delegateTestSession,
-	}, store, nil)
+	}, store, nil, 3)
 
 	if err == nil || !strings.Contains(err.Error(), "policy denied") {
 		t.Fatalf("expected policy denial with nil policy, got err=%v", err)
@@ -94,7 +94,7 @@ func TestDelegateTask_SelfDelegationBlocked(t *testing.T) {
 		TargetAgent: "agent-a",
 		Prompt:      "think harder",
 		SessionID:   delegateTestSession,
-	}, store, pol)
+	}, store, pol, 2)
 
 	if err == nil || !strings.Contains(err.Error(), "cannot delegate to yourself") {
 		t.Fatalf("expected self-delegation rejection, got err=%v", err)
@@ -118,7 +118,7 @@ func TestDelegateTask_InputValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := delegateTask(context.Background(), &tt.input, store, pol)
+			_, err := delegateTask(context.Background(), &tt.input, store, pol, 3)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("expected %q, got err=%v", tt.want, err)
 			}
@@ -135,7 +135,7 @@ func TestDelegateTask_TargetNotFound(t *testing.T) {
 		TargetAgent: "nonexistent",
 		Prompt:      "hello",
 		SessionID:   delegateTestSession,
-	}, store, pol)
+	}, store, pol, 2)
 
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected target not found error, got err=%v", err)
@@ -158,7 +158,7 @@ func TestDelegateTask_TimeoutClamped(t *testing.T) {
 		Prompt:      "hello",
 		SessionID:   delegateTestSession,
 		TimeoutSec:  9999, // should be clamped to 300s
-	}, store, pol)
+	}, store, pol, 2)
 
 	// Task will be created but context will cancel quickly.
 	if err != nil {
@@ -186,7 +186,7 @@ func TestDelegateTask_ContextCancelAbortsChild(t *testing.T) {
 		TargetAgent: "agent-b",
 		Prompt:      "hello",
 		SessionID:   delegateTestSession,
-	}, store, pol)
+	}, store, pol, 2)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

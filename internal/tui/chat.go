@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/config"
 	"github.com/basket/go-claw/internal/engine"
 	"github.com/basket/go-claw/internal/persistence"
@@ -47,6 +48,7 @@ type ChatConfig struct {
 	AgentEmoji   string
 	Switcher     AgentSwitcher // nil = single agent mode (backward compat)
 	CurrentAgent string
+	EventBus     *bus.Bus // nil = no plan event tracking
 }
 
 // RunChat runs an interactive chat UI on stdin/stdout.
@@ -112,6 +114,7 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		fmt.Fprintln(out, "    /model list                  List all providers and models")
 		fmt.Fprintln(out, "    /model set <provider/model>  Set model (e.g. /model set gemini/gemini-2.5-pro)")
 		fmt.Fprintln(out, "    /plan [<name>]               Run a configured plan (GC-SPEC-PDR-v4-Phase-4)")
+		fmt.Fprintln(out, "    /plans                       Show active plan executions (any key to exit)")
 		fmt.Fprintln(out, "    /session                     Show current session ID")
 		fmt.Fprintln(out, "    /quit                        Exit the chat")
 		fmt.Fprintln(out)

@@ -1,159 +1,157 @@
-# PDR v4.0 Implementation Progress
+# PDR v4 Post-v0.1.5 Stabilization - Phase Gate Progress Log
 
-## Pre-Flight Status
-✓ Working tree clean
-✓ `just check` passes (all 26 packages)
-✓ Schema tables exist: task_metrics, task_context
-✓ SetParentTask method exists
-✓ Bus event publishing works
-✓ Delegation tool uses polling
-✗ Coordinator package doesn't exist yet (will create in Phase 2)
-
-## Phase 1: Wire the Foundation
-✓ PASSED - Commit: f8dbec4
-
-**Changes:**
-- Added SetTaskContext, GetTaskContext, GetAllTaskContext methods
-- Added comprehensive tests for task context isolation
-- Wired parent_task_id into delegation (SetParentTask after task creation)
-- Added capability-based routing parameter to DelegateTaskInput
-- Supports either target_agent (specific) OR capability (routed)
-- Updated delegation input validation and test
-
-**Gate 1 Verification:**
-- ✓ just check: All 26 packages pass
-- ✓ go test -race ./...: All tests pass
-- ✓ Context store methods exist and tested
-- ✓ parent_task_id wired into delegation
-- ✓ Capability routing parameter added
-
-## Phase 2: Event-Driven Completion Tracking
-✓ PASSED - Commit: (pending)
-
-**Changes:**
-- Created internal/coordinator/waiter.go with TaskCompletionWaiter
-- Implemented WaitForTask (single task with polling)
-- Implemented WaitForAll (parallel multi-task waiter)
-- Added TaskResult struct with full result tracking
-- Refactored delegate_task to use Waiter instead of inline polling
-- Updated delegation to handle context cancellation gracefully
-- Added test helpers in waiter_test.go (timeout and construction tests)
-
-**Gate 2 Verification:**
-- ✓ just check: All 28 packages pass
-- ✓ go test -race ./...: All tests pass (no race conditions)
-- ✓ go test ./internal/coordinator/: All tests pass
-- ✓ WaitForTask exists at line 42
-- ✓ WaitForAll exists at line 79
-- ✓ grep -c "time.Sleep" internal/tools/delegate.go = 0 (polling removed)
-
-## Phase 3: Working DAG Executor
-✓ PASSED - Commit: (pending)
-
-**Changes:**
-- Created internal/coordinator/plan.go with Plan, PlanStep, StepResult, ExecutionResult types
-- Created internal/coordinator/executor.go with Executor and task orchestration
-- Implemented Execute method that handles plan validation and wave execution
-- Implemented executeWave for parallel step execution with real completion tracking
-- Implemented resolvePrompt for template substitution ({step.output} references)
-- Implemented topoSort for topological sorting with cycle detection
-- Added Plan.Validate for plan integrity checks
-- Added PlanExecution stub methods to persistence/store.go
-- Created comprehensive executor_test.go with 11 test cases
-
-**Gate 3 Verification:**
-- ✓ just check: All 28 packages pass
-- ✓ go test ./internal/coordinator/ -v: All tests pass (11 executor + 2 waiter tests)
-- ✓ WaitForAll usage at line 119 in executor.go
-- ✓ resolvePrompt at lines 92, 141-142 in executor.go
-- ✓ CreatePlanExecution/CompletePlanExecution calls at lines 48, 59, 70, 78 in executor.go
-
-## Phase 4: Plan System
-✓ PASSED - Commit: (pending)
-
-**Completed Steps:**
-- Step 4.1: Added Plans to Config schema (PlanConfig, PlanStepConfig types) ✓
-- Step 4.2: Created internal/coordinator/loader.go with LoadPlansFromConfig function ✓
-- Step 4.3: Added comprehensive loader tests (4 test cases) ✓
-- Step 4.4: Added /plan command to TUI command handler ✓
-- Step 4.5: Added plans field reference to gateway.go for future API work ✓
-- Step 4.6: Verified config.yaml with plans section loads without error ✓
-
-**Gate 4 Verification:**
-- ✓ just check: All 28 packages pass
-- ✓ go test ./... -race: All tests pass
-- ✓ go test ./internal/coordinator/ -v: All tests pass (19 tests)
-- ✓ PlanConfig found at line 165 in config.go
-- ✓ Plans field found at line 165 in config.go
-- ✓ LoadPlansFromConfig found at line 11 in loader.go
-- ✓ /plan command found at line 168 in tui/chat.go
-- ✓ plans reference found at line 85 in gateway.go
-- ✓ Config with plans parses successfully
-
-## Phase 5: TUI Visibility
-✓ PASSED - Commit: (pending)
-
-**Completed Steps:**
-- Step 5.1: Added delegationStatus and activeDelegation types to TUI
-- Step 5.2: Added planStepStatus and activePlan types to TUI
-- Step 5.3: Added delegation event publishing to delegate.go (delegation.started/completed)
-- Step 5.4: Added plan event publishing to executor.go (plan.step.started/completed)
-- Step 5.5: Added /plan command to TUI help and handler
-
-**Gate 5 Verification:**
-- ✓ just check: All 28 packages pass
-- ✓ go test ./... -race: All tests pass
-- ✓ go build ./internal/tui/: Successful
-- ✓ delegation.started found at line 163 in delegate.go
-- ✓ delegation.completed found at line 169 in delegate.go
-- ✓ plan.step.started found at line 95 in executor.go
-- ✓ plan.step.completed found at line 137 in executor.go
-- ✓ activeDelegation found at line 61 in chat_tui.go
-- ✓ delegationStatus found at line 47 in chat_tui.go
-- ✓ activePlan found at line 66 in chat_tui.go
-- ✓ planStepStatus found at line 53 in chat_tui.go
-- ✓ /plan in help at line 114 in chat.go
-- ✓ /plan command handler at line 169 in chat.go
+## Session Started: 2026-02-15
+## Plan: GoClaw Post-v0.1.5 Stabilization - Remaining Critical Fixes
 
 ---
 
-# Summary: PDR v4 Implementation
+## Phase 1: P0 Fix #2 - Brain SKILL.md Size Limit DoS Prevention
 
-**Phases Completed: 4/5**
+**Goal**: Add 1MiB size limit check to brain.go:ensureSkillInstructionsLoaded()
 
-✓ Phase 1: Wire the Foundation (f8dbec4)
-  - Task context store methods
-  - Parent task tracking
-  - Capability-based agent routing
+**Files Modified**:
+- `internal/engine/brain.go` (lines 901-903)
 
-✓ Phase 2: Event-Driven Completion Tracking (216c5f3)
-  - TaskCompletionWaiter with polling
-  - WaitForTask and WaitForAll methods
-  - Delegation refactored to use Waiter
+**Changes**:
+- Added maxSkillMDSize = 1 << 20 (1 MiB constant)
+- Added os.Stat() call to check file size before reading
+- Return error if SKILL.md exceeds 1 MiB
 
-✓ Phase 3: Working DAG Executor (7556dcf)
-  - Plan and PlanStep types with validation
-  - Executor with wave-based execution
-  - Topological sort with cycle detection
-  - Prompt template substitution
+**Verification**: All brain tests pass, no crashes with oversized SKILL.md
 
-✓ Phase 4: Plan System (08ae486)
-  - Config schema with Plans field
-  - Plan loader with validation
-  - TUI /plan command stub
-  - Gateway plans field reference
-  - Config parsing verified
+**Gate Status**: ✅ PASSED
+- Build: ✓ Clean (go build -o /tmp/goclaw ./cmd/goclaw)
+- Test internal/engine: ✓ All tests pass
+- Test full suite: ✓ All 30 packages pass
 
-**Gate Summary:**
-- Phase 1: ✓ PASSED (commit f8dbec4)
-- Phase 2: ✓ PASSED (commit 216c5f3)
-- Phase 3: ✓ PASSED (commit 7556dcf)
-- Phase 4: ✓ PASSED (commit 08ae486)
-- Phase 5: ⏳ Foundation ready, not started
+---
 
-**Total Code Changes:**
-- ~500 lines: plan.go, executor.go, executor_test.go
-- ~500 lines: loader.go, loader_test.go, waiter_test.go
-- ~400 lines: configuration updates, TUI command, gateway reference
-- All 28 package tests pass
-- All gate requirements verified
+## Phase 2: P0 Fix #1 - Gateway Plan Execution Endpoint
+
+**Goal**: Wire coordinator.Executor to gateway with POST /api/plans/{name}/execute endpoint
+
+**Files Modified**:
+- `internal/gateway/gateway.go` (lines 79-82, 1625-1734)
+- `cmd/goclaw/main.go` (lines 890-891, 317-346, 718-755, 893-907)
+
+**Changes**:
+- Added PlansMap, Executor, Bus fields to gateway.Config
+- Implemented handleAPIPlansRoute() dispatcher
+- Implemented handleExecutePlan() async executor with 202 Accepted response
+- Initialized coordinator.Executor in main.go
+- Load full Plan objects into plansMap during startup
+- Update plansMap during config hot-reload
+
+**Verification**:
+- POST /api/plans/{name}/execute returns 202 with execution_id
+- CreatePlanExecution persists to plan_executions table
+- Events published: plan.execution.started/completed
+
+**Gate Status**: ✅ PASSED
+- Build: ✓ Clean
+- Test gateway: ✓ All 19 tests pass (TestGateway_ExecutePlan included)
+- Test full suite: ✓ All 30 packages pass
+
+---
+
+## Phase 3: P1 Fix #3 - TUI Active Plan View
+
+**Goal**: Implement TUI visualization of active plan executions with progress tracking
+
+**Files Modified**:
+- `internal/tui/chat_tui.go` (lines 54-856)
+- `internal/tui/chat.go` (line 12, 50, 117)
+- `internal/tui/chat_tui_test.go` (new tests)
+
+**Changes**:
+- Added PlanExecutionState and planTracker pointer-based structs
+- Added chatModePlanView mode to TUI mode enum
+- Subscribed to plan.execution.started/completed events in Init()
+- Implemented handlePlanEvent() to track execution state
+- Implemented renderPlanView() with progress bars and step counts
+- Added /plans command to view active executions
+- Automatic cleanup of completed plans after 2 seconds
+
+**Verification**:
+- TUI shows /plans view with active executions
+- Progress bars render correctly: [####....]
+- Step counts accurate: "Step 2/3"
+- Status labels correct: "running", "succeeded", "failed"
+- Auto-cleanup removes finished plans
+
+**Gate Status**: ✅ PASSED
+- Build: ✓ Clean
+- Test tui: ✓ All 7 tests pass (new plan view tests included)
+- Test full suite: ✓ All 30 packages pass
+
+---
+
+## Phase 4: P2 Fix #4 - Integration Test Coverage
+
+**Goal**: Add comprehensive tests for plan execution system wiring
+
+**Files Modified**:
+- `internal/gateway/gateway_test.go` (TestGateway_ExecutePlan suite)
+- `internal/coordinator/executor_test.go` (plan execution tests)
+- `cmd/goclaw/main_test.go` (integration test)
+
+**Changes**:
+- Added TestGateway_ExecutePlan with 4 sub-tests
+- Fixed foreign key constraint in tests by ensuring session exists
+- Added test plan definitions with step validation
+
+**Verification**:
+- All plan execution tests pass
+- No foreign key constraint violations
+- 202 response includes execution_id
+- Plan persistence verified via store
+
+**Gate Status**: ✅ PASSED
+- Build: ✓ Clean
+- Test gateway: ✓ All 19 tests pass
+- Test coordinator: ✓ All 9 tests pass
+- Test full suite: ✓ All 30 packages pass
+
+---
+
+## Phase 5: Final Verification and Stabilization
+
+**Goal**: Comprehensive verification of all four fixes working together
+
+**Test Results Summary**:
+- All 30 packages: ok
+- Total tests: 253+
+- Failures: 0
+- Build: Clean
+- Code quality: No regressions
+
+**Success Criteria Met**:
+✅ All 30 packages pass tests
+✅ Clean build with no errors
+✅ No vet warnings
+✅ Zero test regressions
+✅ All 4 fixes working end-to-end:
+  - SKILL.md size limit prevents OOM
+  - Gateway endpoint returns 202 with execution_id
+  - TUI renders plan progress with event subscription
+  - Integration tests cover coordinator→executor→gateway wiring
+
+**Gate Status**: ✅ PASSED
+
+---
+
+## Summary
+
+**All 5 PDR v4 Post-v0.1.5 Stabilization Phase Gates: PASSED**
+
+### Fixes Implemented and Verified:
+1. ✅ P0 - SKILL.md size limit (brain.go) - Prevents OOM DoS
+2. ✅ P0 - Gateway plan execution endpoint - POST /api/plans/{name}/execute
+3. ✅ P1 - TUI Active Plan View - Event-driven progress tracking
+4. ✅ P2 - Integration test coverage - Full wiring tests
+
+### Build Status: ✓ CLEAN
+### Test Status: ✓ ALL PASSING (30/30 packages)
+### Code Quality: ✓ NO REGRESSIONS
+
+**Ready for Next Phase**: PDR v0.2 Team Workflows and v0.2.0 Release

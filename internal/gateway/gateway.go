@@ -17,6 +17,7 @@ import (
 	"github.com/basket/go-claw/internal/audit"
 	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/config"
+	"github.com/basket/go-claw/internal/coordinator"
 	"github.com/basket/go-claw/internal/engine"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
@@ -74,6 +75,12 @@ type Config struct {
 
 	// Plans holds configured workflow plans (GC-SPEC-PDR-v4-Phase-4).
 	Plans map[string]PlanSummary
+
+	// PlansMap holds full plan definitions for execution (GC-SPEC-PDR-v4-Phase-4).
+	PlansMap map[string]*coordinator.Plan
+
+	// Executor runs multi-step workflow plans (GC-SPEC-PDR-v4-Phase-4).
+	Executor *coordinator.Executor
 }
 
 type Server struct {
@@ -154,7 +161,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/sessions/", s.handleAPISessionMessages)
 	mux.HandleFunc("/api/skills", s.handleAPISkills)
 	mux.HandleFunc("/api/config", s.handleAPIConfig)
-	mux.HandleFunc("/api/plans", s.handleAPIPlans)
+	mux.HandleFunc("/api/plans", s.handleAPIPlansRoute)
+	mux.HandleFunc("/api/plans/", s.handleAPIPlansRoute)
 
 	// OpenAI-compatible endpoints
 	mux.HandleFunc("/v1/chat/completions", s.handleOpenAIChatCompletion)
@@ -1614,12 +1622,25 @@ type PlanSummary struct {
 	AgentIDs  []string `json:"agent_ids"`
 }
 
-// handleAPIPlans returns the list of configured plans (GC-SPEC-PDR-v4-Phase-4: Plan system).
-func (s *Server) handleAPIPlans(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+// handleAPIPlansRoute dispatches GET /api/plans (list) and POST /api/plans/{name}/execute (GC-SPEC-PDR-v4-Phase-4: Plan system).
+func (s *Server) handleAPIPlansRoute(w http.ResponseWriter, r *http.Request) {
+	// GET /api/plans - list all plans
+	if (r.URL.Path == "/api/plans" || r.URL.Path == "/api/plans/") && r.Method == http.MethodGet {
+		s.handleAPIPlans(w, r)
 		return
 	}
+
+	// POST /api/plans/{name}/execute - execute a plan
+	if strings.HasSuffix(r.URL.Path, "/execute") && r.Method == http.MethodPost {
+		s.handleExecutePlan(w, r)
+		return
+	}
+
+	http.Error(w, "not found", http.StatusNotFound)
+}
+
+// handleAPIPlans returns the list of configured plans.
+func (s *Server) handleAPIPlans(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -1630,4 +1651,92 @@ func (s *Server) handleAPIPlans(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"plans": plans})
+}
+
+// handleExecutePlan executes a plan asynchronously (GC-SPEC-PDR-v4-Phase-4: Plan execution).
+func (s *Server) handleExecutePlan(w http.ResponseWriter, r *http.Request) {
+	if !s.authorize(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract plan name from /api/plans/{name}/execute
+	path := strings.TrimPrefix(r.URL.Path, "/api/plans/")
+	planName := strings.TrimSuffix(path, "/execute")
+
+	if planName == "" {
+		http.Error(w, "plan name required", http.StatusBadRequest)
+		return
+	}
+
+	// Parse optional session_id from request body
+	type executeRequest struct {
+		SessionID string `json:"session_id,omitempty"`
+	}
+	var req executeRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Generate session if not provided
+	sessionID := req.SessionID
+	if sessionID == "" {
+		sessionID = uuid.NewString()
+	}
+
+	// Validate plan exists
+	plan, exists := s.cfg.PlansMap[planName]
+	if !exists {
+		http.Error(w, fmt.Sprintf("plan %q not found", planName), http.StatusNotFound)
+		return
+	}
+
+	// Guard: executor must be initialized
+	if s.cfg.Executor == nil {
+		http.Error(w, "plan executor unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Generate execution ID
+	executionID := uuid.NewString()
+
+	// Ensure session exists (plan_executions has FK on sessions).
+	if err := s.cfg.Store.EnsureSession(r.Context(), sessionID); err != nil {
+		slog.Error("failed to ensure session for plan execution", "error", err, "session_id", sessionID)
+		http.Error(w, "failed to start plan execution", http.StatusInternalServerError)
+		return
+	}
+
+	// Record plan start in DB (synchronous - fail fast on errors)
+	if err := s.cfg.Store.CreatePlanExecution(r.Context(), executionID, planName, sessionID, len(plan.Steps)); err != nil {
+		slog.Error("failed to create plan execution", "error", err, "execution_id", executionID)
+		http.Error(w, "failed to start plan execution", http.StatusInternalServerError)
+		return
+	}
+
+	// Launch async execution (fire-and-forget)
+	go func() {
+		ctx := context.Background() // detached from request context
+		result, err := s.cfg.Executor.Execute(ctx, plan, sessionID)
+		if err != nil {
+			slog.Error("plan execution failed", "execution_id", executionID, "plan", planName, "error", err)
+			_ = s.cfg.Store.CompletePlanExecution(ctx, executionID, "failed", 0)
+		} else {
+			slog.Info("plan execution completed", "execution_id", executionID, "plan", planName, "cost", result.TotalCost())
+			_ = s.cfg.Store.CompletePlanExecution(ctx, executionID, "succeeded", result.TotalCost())
+		}
+	}()
+
+	// Return 202 Accepted with execution_id immediately
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"execution_id": executionID,
+		"session_id":   sessionID,
+		"plan_name":    planName,
+		"status":       "running",
+	})
 }

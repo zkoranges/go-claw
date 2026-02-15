@@ -11,6 +11,7 @@ type agentIDKey struct{}
 type taskIDKey struct{}
 type sessionIDKey struct{}
 type runIDKey struct{}
+type delegationHopKey struct{}
 
 // WithTraceID attaches a trace_id to the context.
 func WithTraceID(ctx context.Context, traceID string) context.Context {
@@ -85,6 +86,19 @@ func RunID(ctx context.Context) string {
 // NewRunID generates a new run_id.
 func NewRunID() string {
 	return uuid.NewString()
+}
+
+// WithDelegationHop attaches hop count to context.
+func WithDelegationHop(ctx context.Context, hop int) context.Context {
+	return context.WithValue(ctx, delegationHopKey{}, hop)
+}
+
+// DelegationHop extracts hop count (0 if absent).
+func DelegationHop(ctx context.Context) int {
+	if v, ok := ctx.Value(delegationHopKey{}).(int); ok {
+		return v
+	}
+	return 0
 }
 
 const DefaultAgentID = "default"

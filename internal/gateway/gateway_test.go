@@ -16,6 +16,7 @@ import (
 	"github.com/basket/go-claw/internal/agent"
 	"github.com/basket/go-claw/internal/audit"
 	"github.com/basket/go-claw/internal/bus"
+	"github.com/basket/go-claw/internal/coordinator"
 	"github.com/basket/go-claw/internal/engine"
 	"github.com/basket/go-claw/internal/gateway"
 	"github.com/basket/go-claw/internal/persistence"
@@ -2312,4 +2313,182 @@ func TestGateway_PolicyDomainAddRejectsMissingDomain(t *testing.T) {
 	if resp.Error.Code != gateway.ErrCodeInvalid {
 		t.Fatalf("expected invalid code %d, got %d", gateway.ErrCodeInvalid, resp.Error.Code)
 	}
+}
+
+// TestGateway_ExecutePlan verifies the POST /api/plans/{name}/execute REST endpoint.
+// GC-SPEC-PDR-v4-Phase-4: Plan execution endpoint integration test.
+func TestGateway_ExecutePlan(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, engine.EchoProcessor{}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  2 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	testPlan := &coordinator.Plan{
+		Name: "test-plan",
+		Steps: []coordinator.PlanStep{
+			{ID: "step1", AgentID: "default", Prompt: "echo hello"},
+		},
+	}
+
+	// Create executor with a mock router (no waiter = test mode).
+	mockRouter := &testChatRouter{store: store}
+	executor := coordinator.NewExecutor(mockRouter, nil, store)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+		PlansMap: map[string]*coordinator.Plan{
+			"test-plan": testPlan,
+		},
+		Plans: map[string]gateway.PlanSummary{
+			"test-plan": {Name: "test-plan", StepCount: 1, AgentIDs: []string{"default"}},
+		},
+		Executor: executor,
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// Test 1: Successful execution (POST /api/plans/test-plan/execute).
+	t.Run("success", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/plans/test-plan/execute", strings.NewReader(`{"session_id":"`+uuid.NewString()+`"}`))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("execute request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusAccepted {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 202, got %d: %s", resp.StatusCode, string(body))
+		}
+
+		var result map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+
+		if result["execution_id"] == nil || result["execution_id"].(string) == "" {
+			t.Fatal("expected non-empty execution_id")
+		}
+		if result["plan_name"] != "test-plan" {
+			t.Fatalf("plan_name: got %v, want test-plan", result["plan_name"])
+		}
+		if result["status"] != "running" {
+			t.Fatalf("status: got %v, want running", result["status"])
+		}
+		if result["session_id"] == nil || result["session_id"].(string) == "" {
+			t.Fatal("expected non-empty session_id")
+		}
+	})
+
+	// Test 2: Non-existent plan returns 404.
+	t.Run("not_found", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/plans/nonexistent/execute", nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("execute request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", resp.StatusCode)
+		}
+	})
+
+	// Test 3: Missing executor returns 503.
+	t.Run("executor_unavailable", func(t *testing.T) {
+		srvNoExec := gateway.New(gateway.Config{
+			Store:     store,
+			Registry:  makeTestRegistry(store, eng),
+			Policy:    gatewayTestPolicy,
+			AuthToken: gatewayTestAuthToken,
+			PlansMap: map[string]*coordinator.Plan{
+				"test-plan": testPlan,
+			},
+			Executor: nil, // No executor.
+		})
+		tsNoExec := httptest.NewServer(srvNoExec.Handler())
+		defer tsNoExec.Close()
+
+		req, err := http.NewRequest(http.MethodPost, tsNoExec.URL+"/api/plans/test-plan/execute", nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("execute request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", resp.StatusCode)
+		}
+	})
+
+	// Test 4: Auto-generated session_id when not provided.
+	t.Run("auto_session_id", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/plans/test-plan/execute", nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("execute request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusAccepted {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("expected 202, got %d: %s", resp.StatusCode, string(body))
+		}
+
+		var result map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+
+		sessionID, ok := result["session_id"].(string)
+		if !ok || sessionID == "" {
+			t.Fatal("expected auto-generated session_id")
+		}
+		// Verify it's a valid UUID.
+		if _, err := uuid.Parse(sessionID); err != nil {
+			t.Fatalf("auto-generated session_id is not a valid UUID: %v", err)
+		}
+	})
+}
+
+// testChatRouter is a minimal ChatTaskRouter for gateway plan execution tests.
+type testChatRouter struct {
+	store *persistence.Store
+}
+
+func (r *testChatRouter) CreateChatTask(ctx context.Context, agentID, sessionID, content string) (string, error) {
+	taskID, err := r.store.CreateTaskForAgent(ctx, agentID, sessionID, fmt.Sprintf(`{"content":%q}`, content))
+	if err != nil {
+		return "", err
+	}
+	return taskID, nil
 }

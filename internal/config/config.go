@@ -155,6 +155,10 @@ type Config struct {
 
 	HeartbeatIntervalMinutes int `yaml:"heartbeat_interval_minutes"`
 
+	// DelegationMaxHops limits delegation chain depth to prevent infinite recursion.
+	// Validated: must be < WorkerCount for each agent to prevent deadlock.
+	DelegationMaxHops int `yaml:"delegation_max_hops"`
+
 	ContextLimits map[string]int `yaml:"context_limits"`
 
 	Skills   SkillsConfig       `yaml:"skills"`
@@ -389,6 +393,9 @@ func Load() (Config, error) {
 	applyEnvOverrides(&cfg)
 	loadTextFiles(&cfg)
 	normalize(&cfg)
+	if err := validateDelegation(&cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -430,6 +437,38 @@ func normalize(cfg *Config) {
 			cfg.Providers["google"] = p
 		}
 	}
+}
+
+// validateDelegation ensures delegation configuration prevents deadlock.
+// Deadlock occurs if all workers are blocked waiting for delegated tasks with no free workers to run them.
+// Solution: DelegationMaxHops must be <= (WorkerCount - 1) to guarantee at least 1 worker always free.
+// Equivalently: DelegationMaxHops < WorkerCount when DelegationMaxHops is strictly less.
+func validateDelegation(cfg *Config) error {
+	// Set default if not configured
+	if cfg.DelegationMaxHops == 0 {
+		cfg.DelegationMaxHops = 2 // Default: max 2 hops (safe for 3+ workers)
+	}
+
+	// Validate per-agent worker count
+	for _, agent := range cfg.Agents {
+		agentWorkers := agent.WorkerCount
+		if agentWorkers == 0 {
+			agentWorkers = cfg.WorkerCount
+		}
+		if cfg.DelegationMaxHops > agentWorkers-1 {
+			return fmt.Errorf("delegation_max_hops (%d) must be <= worker_count-1 (%d) for agent %s to prevent deadlock",
+				cfg.DelegationMaxHops, agentWorkers-1, agent.AgentID)
+		}
+	}
+
+	// Check default agent worker count
+	defaultWorkers := cfg.WorkerCount
+	if cfg.DelegationMaxHops > defaultWorkers-1 {
+		return fmt.Errorf("delegation_max_hops (%d) must be <= default worker_count-1 (%d) to prevent deadlock",
+			cfg.DelegationMaxHops, defaultWorkers-1)
+	}
+
+	return nil
 }
 
 // ProviderAPIKey returns the API key for the given provider, checking env overrides first.

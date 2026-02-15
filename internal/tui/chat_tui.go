@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/basket/go-claw/internal/audit"
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/config"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/shared"
@@ -42,6 +44,28 @@ type spinnerTickMsg struct{}
 
 // statusTickMsg triggers a periodic refresh of operational metrics (GC-SPEC-TUI-002).
 type statusTickMsg struct{}
+
+// planEventMsg delivers a plan event from the bus subscription to the TUI update loop.
+type planEventMsg struct {
+	event bus.Event
+}
+
+// PlanExecutionState tracks an active plan execution for display in the TUI.
+type PlanExecutionState struct {
+	ExecutionID    string
+	PlanName       string
+	Status         string // "running", "succeeded", "failed"
+	TotalSteps     int
+	CompletedSteps int
+	StartedAt      time.Time
+}
+
+// planTracker is a shared, pointer-based container for plan execution state.
+// Bubbletea passes models by value, so a mutex cannot live directly on chatModel.
+type planTracker struct {
+	mu         sync.RWMutex
+	executions map[string]*PlanExecutionState
+}
 
 // GC-SPEC-PDR-v4-Phase-5: Delegation and plan progress tracking types.
 type delegationStatus struct {
@@ -74,6 +98,7 @@ const (
 	chatModeChat chatMode = iota
 	chatModeModelSelector
 	chatModeAgentSelector
+	chatModePlanView
 )
 
 type chatModel struct {
@@ -106,6 +131,10 @@ type chatModel struct {
 	// GC-SPEC-TUI-002: Operational status bar.
 	metrics    persistence.MetricsCounts
 	denyCount  int64
+
+	// Plan execution tracking (GC-SPEC-PDR-v4-Phase-5).
+	plans   *planTracker
+	planSub *bus.Subscription
 }
 
 func newChatModel(ctx context.Context, cc ChatConfig, sessionID, agentPrefix, modelName string) chatModel {
@@ -116,6 +145,11 @@ func newChatModel(ctx context.Context, cc ChatConfig, sessionID, agentPrefix, mo
 		agentPrefix: agentPrefix,
 		modelName:   modelName,
 		mode:        chatModeChat,
+		plans:       &planTracker{executions: make(map[string]*PlanExecutionState)},
+	}
+	// Subscribe to plan events from the event bus.
+	if cc.EventBus != nil {
+		m.planSub = cc.EventBus.Subscribe("plan.")
 	}
 	// Small intro line inside the UI (kept minimal; avoids printing to stdout).
 	m.history = append(m.history, chatEntry{
@@ -146,7 +180,11 @@ func runChatTUI(ctx context.Context, m chatModel, cancel context.CancelFunc) err
 }
 
 func (m chatModel) Init() tea.Cmd {
-	return tea.Batch(waitCtxDone(m.ctx), statusTickCmd())
+	cmds := []tea.Cmd{waitCtxDone(m.ctx), statusTickCmd()}
+	if m.planSub != nil {
+		cmds = append(cmds, waitForPlanEvent(m.planSub))
+	}
+	return tea.Batch(cmds...)
 }
 
 func statusTickCmd() tea.Cmd {
@@ -165,6 +203,14 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ctxDoneMsg:
 		return m, tea.Quit
 
+	case planEventMsg:
+		m.plans.handleEvent(msg.event)
+		var cmd tea.Cmd
+		if m.planSub != nil {
+			cmd = waitForPlanEvent(m.planSub)
+		}
+		return m, cmd
+
 	case statusTickMsg:
 		// GC-SPEC-TUI-002: Refresh operational metrics for the status bar.
 		if m.cc.Store != nil {
@@ -173,6 +219,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.denyCount = audit.DenyCount()
+		m.plans.cleanup()
 		return m, statusTickCmd()
 
 	case tea.KeyMsg:
@@ -245,6 +292,17 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		if m.mode == chatModePlanView {
+			switch msg.String() {
+			case "ctrl+c", "ctrl+d":
+				return m, tea.Quit
+			default:
+				// Any key exits plan view back to chat.
+				m.mode = chatModeChat
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "ctrl+d":
 			return m, tea.Quit
@@ -268,8 +326,15 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Slash commands.
 			if strings.HasPrefix(line, "/") {
-				// /agents (no args) is interactive; embed the agent selector.
 				trimmed := strings.TrimSpace(line)
+
+				// /plans toggles the plan execution view.
+				if trimmed == "/plans" {
+					m.mode = chatModePlanView
+					return m, nil
+				}
+
+				// /agents (no args) is interactive; embed the agent selector.
 				if (trimmed == "/agents" || trimmed == "/agent") && m.cc.Switcher != nil {
 					infos := m.cc.Switcher.ListAgentInfo()
 					if len(infos) > 0 {
@@ -491,6 +556,11 @@ func (m chatModel) View() string {
 		return b.String()
 	}
 
+	if m.mode == chatModePlanView {
+		b.WriteString(m.renderPlanView())
+		return b.String()
+	}
+
 	// Render history, clipped to window height (best-effort; no expensive wrapping).
 	hLines := m.renderHistoryLines()
 	available := m.height - 6 // header + instructions + blank + input + spinner + status bar
@@ -679,4 +749,114 @@ func waitForSpinner() tea.Cmd {
 	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
 		return spinnerTickMsg{}
 	})
+}
+
+// waitForPlanEvent blocks until a plan event arrives on the subscription channel.
+func waitForPlanEvent(sub *bus.Subscription) tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-sub.Ch()
+		if !ok {
+			return nil // channel closed
+		}
+		return planEventMsg{event: event}
+	}
+}
+
+// handlePlanEvent processes plan bus events and updates the planTracker.
+func (pt *planTracker) handleEvent(event bus.Event) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+
+	payload, ok := event.Payload.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	switch event.Topic {
+	case "plan.execution.started":
+		execID, _ := payload["execution_id"].(string)
+		planName, _ := payload["plan_name"].(string)
+		totalSteps, _ := payload["total_steps"].(int)
+		if execID == "" {
+			return
+		}
+		pt.executions[execID] = &PlanExecutionState{
+			ExecutionID: execID,
+			PlanName:    planName,
+			Status:      "running",
+			TotalSteps:  totalSteps,
+			StartedAt:   time.Now(),
+		}
+
+	case "plan.execution.completed":
+		execID, _ := payload["execution_id"].(string)
+		status, _ := payload["status"].(string)
+		if execID == "" {
+			return
+		}
+		if pe, exists := pt.executions[execID]; exists {
+			pe.Status = status
+			pe.CompletedSteps = pe.TotalSteps
+		}
+	}
+}
+
+// cleanup removes completed plans older than 2 seconds.
+func (pt *planTracker) cleanup() {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	now := time.Now()
+	for id, pe := range pt.executions {
+		if pe.Status != "running" && now.Sub(pe.StartedAt) > 2*time.Second {
+			delete(pt.executions, id)
+		}
+	}
+}
+
+// renderPlanView renders the plan execution view.
+func (m chatModel) renderPlanView() string {
+	m.plans.mu.RLock()
+	defer m.plans.mu.RUnlock()
+
+	var b strings.Builder
+	b.WriteString("Plan Executions  [any key: back to chat]\n")
+	b.WriteString(strings.Repeat("-", 40))
+	b.WriteString("\n\n")
+
+	if len(m.plans.executions) == 0 {
+		b.WriteString("No active plans.\n")
+		return b.String()
+	}
+
+	for _, pe := range m.plans.executions {
+		barWidth := 20
+		filled := 0
+		if pe.TotalSteps > 0 {
+			filled = (pe.CompletedSteps * barWidth) / pe.TotalSteps
+		}
+		if filled > barWidth {
+			filled = barWidth
+		}
+		empty := barWidth - filled
+		bar := "[" + strings.Repeat("#", filled) + strings.Repeat(".", empty) + "]"
+
+		duration := time.Since(pe.StartedAt).Truncate(time.Second)
+
+		statusLabel := pe.Status
+		switch pe.Status {
+		case "running":
+			statusLabel = "RUNNING"
+		case "succeeded":
+			statusLabel = "OK"
+		case "failed":
+			statusLabel = "FAILED"
+		}
+
+		b.WriteString(fmt.Sprintf("  %s\n", pe.PlanName))
+		b.WriteString(fmt.Sprintf("    %s %d/%d steps  %s  %s\n",
+			bar, pe.CompletedSteps, pe.TotalSteps, statusLabel, duration))
+		b.WriteString(fmt.Sprintf("    ID: %s\n\n", pe.ExecutionID))
+	}
+
+	return b.String()
 }
