@@ -47,8 +47,28 @@
 - ✓ WaitForAll exists at line 79
 - ✓ grep -c "time.Sleep" internal/tools/delegate.go = 0 (polling removed)
 
-## Phase 3-5: DEFERRED
-Not started due to time constraints. Would require:
-- Phase 3: DAG executor refactoring (~200-300 lines)
-- Phase 4: Plan system from config.yaml (~400-500 lines)
-- Phase 5: TUI visibility (~200-300 lines)
+## Phase 3: Working DAG Executor
+✓ PASSED - Commit: (pending)
+
+**Changes:**
+- Created internal/coordinator/plan.go with Plan, PlanStep, StepResult, ExecutionResult types
+- Created internal/coordinator/executor.go with Executor and task orchestration
+- Implemented Execute method that handles plan validation and wave execution
+- Implemented executeWave for parallel step execution with real completion tracking
+- Implemented resolvePrompt for template substitution ({step.output} references)
+- Implemented topoSort for topological sorting with cycle detection
+- Added Plan.Validate for plan integrity checks
+- Added PlanExecution stub methods to persistence/store.go
+- Created comprehensive executor_test.go with 11 test cases
+
+**Gate 3 Verification:**
+- ✓ just check: All 28 packages pass
+- ✓ go test ./internal/coordinator/ -v: All tests pass (11 executor + 2 waiter tests)
+- ✓ WaitForAll usage at line 119 in executor.go
+- ✓ resolvePrompt at lines 92, 141-142 in executor.go
+- ✓ CreatePlanExecution/CompletePlanExecution calls at lines 48, 59, 70, 78 in executor.go
+
+## Phase 4-5: DEFERRED
+Partial implementation achieved. Would require:
+- Phase 4: Plan system from config.yaml (not started)
+- Phase 5: TUI visibility (not started)

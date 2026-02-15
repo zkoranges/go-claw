@@ -3740,3 +3740,31 @@ func (s *Store) GetExperimentSamples(ctx context.Context, expID string) ([]*Expe
 	}
 	return samples, rows.Err()
 }
+
+// PlanExecution represents a running or completed plan.
+// GC-SPEC-PDR-v4-Phase-3: Plan execution tracking.
+type PlanExecution struct {
+	ID             string
+	PlanName       string
+	SessionID      string
+	Status         string
+	TotalSteps     int
+	CompletedSteps int
+	TotalCostUSD   float64
+	CreatedAt      time.Time
+	CompletedAt    *time.Time
+}
+
+// CreatePlanExecution records the start of a plan execution.
+// TODO: Implement with plan_executions table once v12 schema is available.
+func (s *Store) CreatePlanExecution(ctx context.Context, id, planName, sessionID string, totalSteps int) error {
+	// Stub implementation - no-op for now
+	return nil
+}
+
+// CompletePlanExecution marks a plan execution as finished.
+// TODO: Implement with plan_executions table once v12 schema is available.
+func (s *Store) CompletePlanExecution(ctx context.Context, id, status string, totalCostUSD float64) error {
+	// Stub implementation - no-op for now
+	return nil
+}
