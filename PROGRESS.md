@@ -13,10 +13,10 @@
 ## Phases
 
 ### Phase 1: Conversation Persistence
-Status: IN PROGRESS
-Commit: TBD
-Tests: TBD
-Notes: AddHistory exists; need LoadHistory and integration
+Status: ✅ COMPLETE
+Commit: 719d3c7
+Tests: 15 passing (15 >= 12 required)
+Notes: Added LoadRecentMessages, LoadMessagesSince, CountMessages, DeleteAgentMessages. All methods tested comprehensively. AddHistory/ListHistory already existed and fully integrated into TUI.
 
 ### Phase 2: Sliding Window & Summarization
 Status: PENDING
