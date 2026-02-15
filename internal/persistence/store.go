@@ -1517,6 +1517,19 @@ func (s *Store) CompleteTask(ctx context.Context, taskID, result string) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit complete task tx: %w", err)
 	}
+
+	// Publish completion event (best-effort, ignore errors).
+	if s.bus != nil {
+		task, err := s.GetTask(ctx, taskID)
+		if err == nil && task != nil {
+			s.bus.Publish("task.completed", map[string]interface{}{
+				"task_id":   taskID,
+				"session_id": task.SessionID,
+				"status":    TaskStatusSucceeded,
+			})
+		}
+	}
+
 	// Snapshot metrics on completion (best-effort)
 	_ = s.RecordTaskMetrics(ctx, taskID)
 	return nil
@@ -1555,6 +1568,19 @@ func (s *Store) FailTask(ctx context.Context, taskID, errMsg string) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit fail task tx: %w", err)
 	}
+
+	// Publish failure event (best-effort, ignore errors).
+	if s.bus != nil {
+		task, err := s.GetTask(ctx, taskID)
+		if err == nil && task != nil {
+			s.bus.Publish("task.failed", map[string]interface{}{
+				"task_id":   taskID,
+				"session_id": task.SessionID,
+				"error":     errMsg,
+			})
+		}
+	}
+
 	// Snapshot metrics on completion (best-effort)
 	_ = s.RecordTaskMetrics(ctx, taskID)
 	return nil
@@ -2048,6 +2074,19 @@ func (s *Store) AbortTask(ctx context.Context, taskID string) (bool, error) {
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit abort task tx: %w", err)
 	}
+
+	// Publish cancellation event (best-effort, ignore errors).
+	if s.bus != nil {
+		task, err := s.GetTask(ctx, taskID)
+		if err == nil && task != nil {
+			s.bus.Publish("task.canceled", map[string]interface{}{
+				"task_id":   taskID,
+				"session_id": task.SessionID,
+				"reason":    "abort_request",
+			})
+		}
+	}
+
 	return true, nil
 }
 
@@ -3299,12 +3338,34 @@ func (s *Store) UpdateTaskTokens(ctx context.Context, taskID string, promptToken
 	if err != nil {
 		return fmt.Errorf("update task tokens %s: %w", taskID, err)
 	}
+
+	// Publish token update event (best-effort, ignore errors).
+	if s.bus != nil {
+		s.bus.Publish(bus.TopicTaskTokens, bus.TaskTokensEvent{
+			TaskID:           taskID,
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+		})
+	}
+
 	return nil
 }
 
 // RecordTaskMetrics snapshots final metrics for a completed task.
 func (s *Store) RecordTaskMetrics(ctx context.Context, taskID string) error {
-	_, err := s.db.ExecContext(ctx, `
+	// Fetch task metrics before recording for event publishing.
+	var promptTokens, completionTokens, totalTokens int
+	var estimatedCost float64
+	var sessionID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT session_id, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd
+		FROM tasks WHERE id = ?`, taskID).
+		Scan(&sessionID, &promptTokens, &completionTokens, &totalTokens, &estimatedCost)
+	if err != nil && err != sql.ErrNoRows {
+		// Continue anyway — metrics recording is best-effort.
+	}
+
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO task_metrics (
 			task_id, agent_id, session_id, parent_task_id, created_at, completed_at,
 			status, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd
@@ -3319,6 +3380,18 @@ func (s *Store) RecordTaskMetrics(ctx context.Context, taskID string) error {
 	if err != nil {
 		return fmt.Errorf("record task metrics %s: %w", taskID, err)
 	}
+
+	// Publish metrics event (best-effort, ignore errors).
+	if s.bus != nil && sessionID != "" {
+		s.bus.Publish(bus.TopicTaskMetrics, bus.TaskMetricsEvent{
+			TaskID:           taskID,
+			InputTokens:      promptTokens,
+			OutputTokens:     completionTokens,
+			TotalTokens:      totalTokens,
+			EstimatedCostUSD: estimatedCost,
+		})
+	}
+
 	return nil
 }
 

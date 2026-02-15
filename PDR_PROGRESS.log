@@ -17,14 +17,18 @@ PHASE 1: ✓ PASSED
   GATE 1: ✓ all checks passed
 
 PHASE 2: Event Infrastructure
-Status: NOT STARTED
-
-PHASE 2: Event Infrastructure
-Status: IN PROGRESS (Core changes done, test file fixes needed)
+Status: ✓ PASSED
   Step 2.1: Identified bus and store wiring points
   Step 2.2: Added bus field to Store struct
   Step 2.3: Updated Store.Open() to accept eventBus parameter
-  Step 2.4: PARTIAL - Updated main.go, skill.go, doctor.go. Test files need manual fixes.
-  Note: Test file persistence.Open calls need ", nil" added (complex due to multi-line patterns)
+  Step 2.4: Updated main.go, skill.go, doctor.go
+  Step 2.5: Fixed all 18 test files to pass eventBus (nil) parameter
+  GATE 2: ✓ all checks passed (build + vet + test + race)
 
-NEXT: Complete Phase 2 test file fixes, then continue with Phase 3-5
+PHASE 3: Event Publishing from State Changes
+Status: IN PROGRESS
+  Step 3.1: Implement event publishing in task completion paths
+  Step 3.2: Implement event publishing in task failure/retry paths
+  Step 3.3: Add integration tests for event publishing
+
+NEXT: Continue with Phase 3

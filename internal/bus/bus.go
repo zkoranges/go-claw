@@ -13,6 +13,40 @@ type Event struct {
 	Payload interface{}
 }
 
+// Task event topics.
+const (
+	TopicTaskStateChanged  = "task.state_changed"
+	TopicTaskMetrics       = "task.metrics"
+	TopicTaskTokens        = "task.tokens"
+	TopicTaskCompleted     = "task.completed"
+	TopicTaskFailed        = "task.failed"
+	TopicTaskRetrying      = "task.retrying"
+)
+
+// TaskStateChangedEvent is published when a task's state changes.
+type TaskStateChangedEvent struct {
+	TaskID    string // Task ID
+	SessionID string // Session ID
+	OldStatus string // Previous status (e.g. QUEUED)
+	NewStatus string // New status (e.g. RUNNING)
+}
+
+// TaskMetricsEvent is published when task metrics are recorded.
+type TaskMetricsEvent struct {
+	TaskID             string  // Task ID
+	InputTokens        int     // Input tokens used
+	OutputTokens       int     // Output tokens used
+	TotalTokens        int     // Total tokens used
+	EstimatedCostUSD   float64 // Estimated cost in USD
+}
+
+// TaskTokensEvent is published when task token counts are updated.
+type TaskTokensEvent struct {
+	TaskID           string // Task ID
+	PromptTokens     int    // Prompt tokens
+	CompletionTokens int    // Completion tokens
+}
+
 // Subscription represents an active subscription.
 type Subscription struct {
 	id     int
