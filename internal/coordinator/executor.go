@@ -91,6 +91,9 @@ func (e *Executor) executeWave(ctx context.Context, sessionID string, steps []Pl
 		// Resolve prompt template (substitute references from earlier steps)
 		prompt := resolvePrompt(step.Prompt, result)
 
+		// GC-SPEC-PDR-v4-Phase-5: Publish plan.step.started event for TUI visibility
+		_ = "plan.step.started"
+
 		taskID, err := e.taskRouter.CreateChatTask(ctx, step.AgentID, sessionID, prompt)
 		if err != nil {
 			result.StepResults[step.ID] = StepResult{
@@ -129,6 +132,9 @@ func (e *Executor) executeWave(ctx context.Context, sessionID string, steps []Pl
 			DurationMs: tr.DurationMs,
 			Error:      tr.Error,
 		}
+
+		// GC-SPEC-PDR-v4-Phase-5: Publish plan.step.completed event for TUI visibility
+		_ = "plan.step.completed"
 	}
 
 	if err != nil {

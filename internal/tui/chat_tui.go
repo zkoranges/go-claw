@@ -43,6 +43,31 @@ type spinnerTickMsg struct{}
 // statusTickMsg triggers a periodic refresh of operational metrics (GC-SPEC-TUI-002).
 type statusTickMsg struct{}
 
+// GC-SPEC-PDR-v4-Phase-5: Delegation and plan progress tracking types.
+type delegationStatus struct {
+	TaskID      string
+	TargetAgent string
+	StartedAt   time.Time
+}
+
+type planStepStatus struct {
+	ID        string
+	AgentID   string
+	Status    string
+	Duration  time.Duration
+	CostUSD   float64
+}
+
+type activeDelegation struct {
+	TaskID string
+	Status delegationStatus
+}
+
+type activePlan struct {
+	Name  string
+	Steps []planStepStatus
+}
+
 type chatMode int
 
 const (

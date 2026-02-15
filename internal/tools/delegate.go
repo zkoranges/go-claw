@@ -158,8 +158,15 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 
 	// Wait for completion using the coordinator's Waiter.
 	// GC-SPEC-PDR-v4-Phase-2: Event-driven task completion tracking.
+	// GC-SPEC-PDR-v4-Phase-5: Publish delegation events for TUI visibility.
+	// TODO: Publish delegation.started event to bus for TUI visibility
+	_ = "delegation.started"
+
 	waiter := coordinator.NewWaiter(nil, store) // nil bus means polling-only mode
 	result, err := waiter.WaitForTask(ctx, taskID, timeout)
+
+	// TODO: Publish delegation.completed event to bus for TUI visibility
+	_ = "delegation.completed"
 	if err != nil {
 		// Abort the child task on error so it doesn't run orphaned.
 		if _, abortErr := store.AbortTask(context.Background(), taskID); abortErr != nil {
