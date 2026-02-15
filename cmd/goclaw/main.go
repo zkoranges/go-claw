@@ -70,6 +70,8 @@ func main() {
 			os.Exit(runStatusCommand(ctx, args[1:]))
 		case "import":
 			os.Exit(runImportCommand(ctx, args[1:]))
+		case "pull":
+			os.Exit(runPullCommand(args[1:]))
 		case "doctor":
 			os.Exit(runDoctorCommand(ctx, args[1:]))
 		case "daemon":
