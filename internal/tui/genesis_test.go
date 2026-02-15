@@ -594,3 +594,45 @@ func escStep(m genesisModel) (genesisModel, tea.Cmd) {
 	result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEscape})
 	return result.(genesisModel), cmd
 }
+
+func TestGenesis_GeneratedConfigIncludesStarterAgents(t *testing.T) {
+	m := newGenesisModel()
+	m.agentName = "TestAgent"
+	m.provider = "google"
+	m.modelID = "gemini-2.5-flash"
+
+	cfg := m.generateConfig()
+
+	// Verify all three starter agents are present
+	if !strings.Contains(cfg, "agent_id: coder") {
+		t.Errorf("expected 'agent_id: coder' in generated config")
+	}
+	if !strings.Contains(cfg, "agent_id: researcher") {
+		t.Errorf("expected 'agent_id: researcher' in generated config")
+	}
+	if !strings.Contains(cfg, "agent_id: writer") {
+		t.Errorf("expected 'agent_id: writer' in generated config")
+	}
+
+	// Verify display names are present
+	if !strings.Contains(cfg, "display_name: Coder") {
+		t.Errorf("expected 'display_name: Coder' in generated config")
+	}
+	if !strings.Contains(cfg, "display_name: Researcher") {
+		t.Errorf("expected 'display_name: Researcher' in generated config")
+	}
+	if !strings.Contains(cfg, "display_name: Writer") {
+		t.Errorf("expected 'display_name: Writer' in generated config")
+	}
+
+	// Verify soul text is present (check for unique parts)
+	if !strings.Contains(cfg, "senior software engineer") {
+		t.Errorf("expected coder soul in generated config")
+	}
+	if !strings.Contains(cfg, "thorough research assistant") {
+		t.Errorf("expected researcher soul in generated config")
+	}
+	if !strings.Contains(cfg, "skilled technical writer") {
+		t.Errorf("expected writer soul in generated config")
+	}
+}

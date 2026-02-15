@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/basket/go-claw/internal/config"
 )
 
 // GenesisResult holds the output of the genesis wizard.
@@ -671,6 +672,18 @@ func (m genesisModel) generateConfig() string {
 	b.WriteString("task_timeout_seconds: 600\n")
 	b.WriteString("bind_addr: 127.0.0.1:18789\n")
 	b.WriteString("log_level: info\n")
+
+	// Add starter agents
+	b.WriteString("\nagents:\n")
+	for _, agent := range config.StarterAgents() {
+		b.WriteString(fmt.Sprintf("  - agent_id: %s\n", agent.AgentID))
+		b.WriteString(fmt.Sprintf("    display_name: %s\n", agent.DisplayName))
+		b.WriteString(fmt.Sprintf("    soul: |\n"))
+		for _, line := range strings.Split(agent.Soul, "\n") {
+			b.WriteString(fmt.Sprintf("      %s\n", line))
+		}
+	}
+
 	return b.String()
 }
 
