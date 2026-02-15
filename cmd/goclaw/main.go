@@ -93,16 +93,19 @@ func main() {
 		engine.SetContextLimitOverrides(cfg.ContextLimits)
 	}
 
+	// GC-SPEC-SEC-006: Initialize audit before logger so E_LOGGER_INIT failures are audited.
+	// Audit only needs homeDir (available from config), not the logger itself.
+	if err := audit.Init(cfg.HomeDir); err != nil {
+		fatalStartup(nil, "E_AUDIT_INIT", err)
+	}
+	defer func() { _ = audit.Close() }()
+
 	logger, closer, err := telemetry.NewLogger(cfg.HomeDir, cfg.LogLevel, quietLogs)
 	if err != nil {
 		fatalStartup(nil, "E_LOGGER_INIT", err)
 	}
 	defer closer.Close()
 	slog.SetDefault(logger)
-	if err := audit.Init(cfg.HomeDir); err != nil {
-		fatalStartup(logger, "E_AUDIT_INIT", err)
-	}
-	defer func() { _ = audit.Close() }()
 	logger.Info("startup phase", "phase", "config_loaded")
 	if host, _, err := net.SplitHostPort(cfg.BindAddr); err == nil {
 		h := strings.TrimSpace(strings.ToLower(host))
@@ -699,7 +702,10 @@ The system runs this checklist periodically to ensure health.
 		}
 	}()
 
-	authToken := loadAuthToken(cfg.HomeDir)
+	authToken, err := loadAuthToken(cfg.HomeDir)
+	if err != nil {
+		fatalStartup(logger, "E_AUTH_TOKEN_WRITE", err)
+	}
 
 	// Skill status closure used by system.status.
 	skillsStatusFn := func(statusCtx context.Context) ([]tools.SkillStatus, error) {
@@ -942,7 +948,7 @@ The system runs this checklist periodically to ensure health.
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				result, err := store.RunRetention(context.Background(),
+				result, err := store.RunRetention(ctx,
 					cfg.RetentionTaskEventsDays,
 					cfg.RetentionAuditLogDays,
 					cfg.RetentionMessagesDays,
@@ -1260,25 +1266,24 @@ func loadDotEnv(path string) {
 	}
 }
 
-func loadAuthToken(homeDir string) string {
+func loadAuthToken(homeDir string) (string, error) {
 	if raw := strings.TrimSpace(os.Getenv("GOCLAW_AUTH_TOKEN")); raw != "" {
-		return raw
+		return raw, nil
 	}
 	tokenPath := filepath.Join(homeDir, "auth.token")
 	b, err := os.ReadFile(tokenPath)
 	if err == nil {
 		if tok := strings.TrimSpace(string(b)); tok != "" {
-			return tok
+			return tok, nil
 		}
 	}
 	// GC-SPEC-CFG-004: generate auth.token on first run if missing.
 	token := uuid.NewString()
 	if err := os.WriteFile(tokenPath, []byte(token+"\n"), 0o600); err != nil {
-		slog.Warn("failed to write auth.token", "error", err)
-		return token
+		return "", fmt.Errorf("failed to persist auth token: %w", err)
 	}
 	slog.Info("auth.token generated", "path", tokenPath)
-	return token
+	return token, nil
 }
 
 type daemonSubcommandMode int
