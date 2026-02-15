@@ -13,7 +13,7 @@ import (
 func openTestStore(t *testing.T) *persistence.Store {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := persistence.Open(filepath.Join(dir, "test.db"))
+	store, err := persistence.Open(filepath.Join(dir, "test.db"), nil)
 	if err != nil {
 		t.Fatalf("open test store: %v", err)
 	}

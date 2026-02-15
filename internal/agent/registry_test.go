@@ -14,13 +14,13 @@ import (
 
 func setupTestRegistry(t *testing.T) (*Registry, *persistence.Store) {
 	t.Helper()
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "test.db"))
+	eventBus := bus.New()
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "test.db"), eventBus)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
 
-	eventBus := bus.New()
 	pol, _ := policy.Load("")
 	livePol := policy.NewLivePolicy(pol, "")
 
@@ -344,13 +344,13 @@ func TestDrainAll(t *testing.T) {
 
 func TestRestorePersistedAgents(t *testing.T) {
 	// Phase 1: create an agent and persist it.
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "restore.db"))
+	eventBus := bus.New()
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "restore.db"), eventBus)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	eventBus := bus.New()
 	pol, _ := policy.Load("")
 	livePol := policy.NewLivePolicy(pol, "")
 
@@ -391,13 +391,13 @@ func TestRestorePersistedAgents(t *testing.T) {
 }
 
 func TestRestoreSkipsInactiveAgents(t *testing.T) {
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "inactive.db"))
+	eventBus := bus.New()
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "inactive.db"), eventBus)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
-	eventBus := bus.New()
 	pol, _ := policy.Load("")
 	livePol := policy.NewLivePolicy(pol, "")
 

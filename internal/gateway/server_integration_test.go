@@ -21,7 +21,7 @@ import (
 
 func TestGateway_RealTCPServerRespondsToStatusAndChat(t *testing.T) {
 	// [SPEC: SPEC-ACP-WS-1, SPEC-ACP-JSONRPC-1] [PDR: V-11]
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

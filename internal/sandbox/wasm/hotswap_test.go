@@ -39,7 +39,7 @@ exit 0
 
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -97,7 +97,7 @@ exit 1
 `)
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -154,7 +154,7 @@ exit 0
 `)
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -217,7 +217,7 @@ exit 0
 `)
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

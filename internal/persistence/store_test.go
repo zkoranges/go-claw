@@ -17,7 +17,7 @@ func openTestStore(t *testing.T) (*persistence.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "goclaw.db")
-	store, err := persistence.Open(dbPath)
+	store, err := persistence.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestStore_OpenRejectsFutureSchemaVersion(t *testing.T) {
 	}
 	_ = db.Close()
 
-	_, err = persistence.Open(dbPath)
+	_, err = persistence.Open(dbPath, nil)
 	if err == nil {
 		t.Fatalf("expected error for future schema version")
 	}
@@ -130,7 +130,7 @@ func TestStore_OpenRejectsChecksumMismatch(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	_, err := persistence.Open(dbPath)
+	_, err := persistence.Open(dbPath, nil)
 	if err == nil {
 		t.Fatalf("expected checksum mismatch error")
 	}
@@ -169,7 +169,7 @@ func TestStore_ClaimAndRecoverRunningTasks(t *testing.T) {
 	}
 
 	// Simulate crash/restart recovery.
-	reopened, err := persistence.Open(dbPath)
+	reopened, err := persistence.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
@@ -899,7 +899,7 @@ func TestStore_Backup(t *testing.T) {
 	}
 
 	// Verify backup exists and is usable.
-	backupStore, err := persistence.Open(backupPath)
+	backupStore, err := persistence.Open(backupPath, nil)
 	if err != nil {
 		t.Fatalf("open backup: %v", err)
 	}
@@ -2605,7 +2605,7 @@ func TestMigration_FutureVersionGuard(t *testing.T) {
 	dbPath := filepath.Join(dir, "goclaw.db")
 
 	// Open to create schema at latest version.
-	store, err := persistence.Open(dbPath)
+	store, err := persistence.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
@@ -2619,7 +2619,7 @@ func TestMigration_FutureVersionGuard(t *testing.T) {
 	store.Close()
 
 	// Re-opening should fail with a version mismatch error.
-	_, err = persistence.Open(dbPath)
+	_, err = persistence.Open(dbPath, nil)
 	if err == nil {
 		t.Fatal("expected error opening DB with future schema version")
 	}
@@ -2633,7 +2633,7 @@ func TestMigration_ExistingDB_BackfillsAgentColumns(t *testing.T) {
 	dbPath := filepath.Join(dir, "goclaw.db")
 
 	// Open to create schema (all tables).
-	store, err := persistence.Open(dbPath)
+	store, err := persistence.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -2653,7 +2653,7 @@ func TestMigration_ExistingDB_BackfillsAgentColumns(t *testing.T) {
 	store.Close()
 
 	// Re-open — should succeed without errors (idempotent schema).
-	store2, err := persistence.Open(dbPath)
+	store2, err := persistence.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("re-open: %v", err)
 	}
@@ -2838,7 +2838,7 @@ func TestStore_MigrationEmitsAuditEvent(t *testing.T) {
 	// We import the audit package indirectly — just verify the event is written
 	// by checking the audit_log table after SetDB.
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := persistence.Open(dbPath)
+	store, err := persistence.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

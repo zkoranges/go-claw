@@ -15,7 +15,7 @@ import (
 
 func TestHost_RegistersRequiredFunctions(t *testing.T) {
 	// [SPEC: SPEC-SEC-HFI-1] [PDR: V-26]
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestHost_RegistersRequiredFunctions(t *testing.T) {
 
 func TestHost_LoadModuleFromFile_ValidWASM(t *testing.T) {
 	// [T-3] Load a minimal valid WASM module from a .wasm file.
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestHost_LoadModuleFromFile_ValidWASM(t *testing.T) {
 
 func TestHost_LoadModuleFromFile_InvalidWASM(t *testing.T) {
 	// [T-3] Loading invalid data should fail gracefully.
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestHost_LoadModuleFromFile_InvalidWASM(t *testing.T) {
 }
 
 func TestHost_LoadModuleFromFile_MissingFile(t *testing.T) {
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestHost_LoadModuleFromFile_MissingFile(t *testing.T) {
 
 func TestHost_HTTPGetEnforcesPolicyAllowlist(t *testing.T) {
 	// [SPEC: SPEC-SEC-POLICY-1, SPEC-SEC-HFI-1] [PDR: V-18]
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestHost_HTTPGetEnforcesPolicyAllowlist(t *testing.T) {
 
 func TestHost_HTTPGetBlocksMultipleDomains(t *testing.T) {
 	// [T-9] Blocked domain test with multiple domains in policy.
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestHost_HTTPGetBlocksMultipleDomains(t *testing.T) {
 
 func TestHost_DefaultPolicyDeniesAll(t *testing.T) {
 	// Default policy has no allowed domains → deny everything.
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestHost_DefaultPolicyDeniesAll(t *testing.T) {
 }
 
 func TestHost_HTTPGetDeniedWhenCapabilityMissing(t *testing.T) {
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestHost_HTTPGetDeniedWhenCapabilityMissing(t *testing.T) {
 
 func TestHost_InvokeModuleRandom_ModuleNotFound(t *testing.T) {
 	// GC-SPEC-SKL-005: Must emit WASM_MODULE_NOT_FOUND for missing modules.
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestHost_InvokeModuleRandom_ModuleNotFound(t *testing.T) {
 
 func TestHost_InvokeModuleRandom_NoExport(t *testing.T) {
 	// GC-SPEC-SKL-005: Must emit WASM_NO_EXPORT when module has no callable export.
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestHost_InvokeModuleRandom_NoExport(t *testing.T) {
 
 func TestHost_InvokeModuleRandom_ContextTimeout(t *testing.T) {
 	// GC-SPEC-SKL-005: Must emit WASM_TIMEOUT when invocation exceeds time limit.
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestHost_InvokeModuleRandom_ContextTimeout(t *testing.T) {
 
 func TestHost_CustomMemoryLimitPages(t *testing.T) {
 	// GC-SPEC-SKL-005: Custom memory limit should be accepted.
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestHost_CustomMemoryLimitPages(t *testing.T) {
 
 func TestHost_HTTPGetReturnsBody(t *testing.T) {
 	// Verify that HTTPGet returns the response body string (used by hostHTTPGet).
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

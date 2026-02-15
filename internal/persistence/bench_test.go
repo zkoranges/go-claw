@@ -15,7 +15,7 @@ func BenchmarkStartup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		dir := b.TempDir()
 		dbPath := filepath.Join(dir, "goclaw.db")
-		store, err := persistence.Open(dbPath)
+		store, err := persistence.Open(dbPath, nil)
 		if err != nil {
 			b.Fatalf("open: %v", err)
 		}
@@ -26,7 +26,7 @@ func BenchmarkStartup(b *testing.B) {
 // BenchmarkClaimLatency measures the p95-targeted claim/update path (V-PERF-004).
 func BenchmarkClaimLatency(b *testing.B) {
 	dir := b.TempDir()
-	store, err := persistence.Open(filepath.Join(dir, "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(dir, "goclaw.db"), nil)
 	if err != nil {
 		b.Fatalf("open: %v", err)
 	}
@@ -73,7 +73,7 @@ func BenchmarkClaimLatency(b *testing.B) {
 // BenchmarkConcurrentSessions exercises 10 sessions with concurrent claim operations (V-PERF-003).
 func BenchmarkConcurrentSessions(b *testing.B) {
 	dir := b.TempDir()
-	store, err := persistence.Open(filepath.Join(dir, "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(dir, "goclaw.db"), nil)
 	if err != nil {
 		b.Fatalf("open: %v", err)
 	}

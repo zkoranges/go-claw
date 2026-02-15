@@ -19,7 +19,7 @@ import (
 
 func openStoreForBrainTest(t *testing.T) *persistence.Store {
 	t.Helper()
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

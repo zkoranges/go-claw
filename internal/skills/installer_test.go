@@ -72,7 +72,7 @@ func initRepoFromTestdata(t *testing.T, testdataDir string) string {
 func openStore(t *testing.T, dir string) *persistence.Store {
 	t.Helper()
 	dbPath := filepath.Join(dir, "goclaw.db")
-	store, err := persistence.Open(dbPath)
+	store, err := persistence.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

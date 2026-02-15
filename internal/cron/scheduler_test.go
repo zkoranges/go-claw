@@ -29,7 +29,7 @@ func openTestStore(t *testing.T) *persistence.Store {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "goclaw.db")
-	store, err := persistence.Open(dbPath)
+	store, err := persistence.Open(dbPath, nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

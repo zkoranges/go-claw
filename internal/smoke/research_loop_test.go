@@ -221,7 +221,7 @@ func TestSmoke_E2EResearchLoopCreatesToolSubTasks(t *testing.T) {
 	// Stop daemon to safely inspect DB artifacts.
 	stopDaemon()
 
-	store, err := persistence.Open(filepath.Join(home, "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(home, "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

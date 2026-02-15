@@ -32,7 +32,7 @@ func (m *MockBrain) Stream(ctx context.Context, sessionID, content string, onChu
 func TestCompactor_CompactIfNeeded(t *testing.T) {
 	// Setup DB
 	tmpDB := t.TempDir() + "/test.db"
-	store, err := persistence.Open(tmpDB)
+	store, err := persistence.Open(tmpDB, nil)
 	if err != nil {
 		t.Fatalf("failed to open store: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestCompactor_CompactIfNeeded(t *testing.T) {
 func TestCompactor_LLMFailure(t *testing.T) {
 	// Setup DB
 	tmpDB := t.TempDir() + "/test_fail.db"
-	store, _ := persistence.Open(tmpDB)
+	store, _ := persistence.Open(tmpDB, nil)
 	defer store.Close()
 	ctx := context.Background()
 	sessionID := "00000000-0000-0000-0000-000000000003"

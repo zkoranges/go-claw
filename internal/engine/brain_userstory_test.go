@@ -17,7 +17,7 @@ import (
 
 func TestUserStory_US2_MultiStepResearchRecordsSearchAndReadTasks(t *testing.T) {
 	// [SPEC: SPEC-GOAL-G3, SPEC-DATA-SCHEMA-1] [PDR: V-8, V-10]
-	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"))
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
