@@ -1271,6 +1271,78 @@ func (s *Store) ArchiveMessages(ctx context.Context, sessionID string, beforeID 
 	return nil
 }
 
+// LoadRecentMessages returns the last N messages for an agent, oldest first.
+// Phase 1: Conversation persistence - loads history for TUI display.
+func (s *Store) LoadRecentMessages(ctx context.Context, agentID string, sessionID string, limit int) ([]HistoryItem, error) {
+	// Delegate to ListHistory which handles the per-agent filtering.
+	return s.ListHistory(ctx, sessionID, agentID, limit)
+}
+
+// LoadMessagesSince returns messages after a given timestamp for an agent.
+// Phase 1: Conversation persistence - filters by time range.
+func (s *Store) LoadMessagesSince(ctx context.Context, agentID string, sessionID string, since time.Time) ([]HistoryItem, error) {
+	if agentID == "" {
+		agentID = "default"
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, session_id, role, content, tokens, created_at
+		FROM messages
+		WHERE session_id = ? AND agent_id = ? AND created_at > ? AND archived_at IS NULL
+		ORDER BY created_at ASC;
+	`, sessionID, agentID, since)
+	if err != nil {
+		return nil, fmt.Errorf("query messages since: %w", err)
+	}
+	defer rows.Close()
+
+	var out []HistoryItem
+	for rows.Next() {
+		var item HistoryItem
+		if err := rows.Scan(&item.ID, &item.SessionID, &item.Role, &item.Content, &item.Tokens, &item.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan message: %w", err)
+		}
+		item.Text = item.Content
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("message rows: %w", err)
+	}
+	return out, nil
+}
+
+// CountMessages returns total message count for an agent.
+// Phase 1: Conversation persistence - for stats.
+func (s *Store) CountMessages(ctx context.Context, agentID string, sessionID string) (int, error) {
+	if agentID == "" {
+		agentID = "default"
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM messages
+		WHERE session_id = ? AND agent_id = ? AND archived_at IS NULL;
+	`, sessionID, agentID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count messages: %w", err)
+	}
+	return count, nil
+}
+
+// DeleteAgentMessages removes all messages for an agent. Used for /clear.
+// Phase 1: Conversation persistence - clear command.
+func (s *Store) DeleteAgentMessages(ctx context.Context, agentID string, sessionID string) error {
+	if agentID == "" {
+		agentID = "default"
+	}
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM messages
+		WHERE session_id = ? AND agent_id = ? AND archived_at IS NULL;
+	`, sessionID, agentID)
+	if err != nil {
+		return fmt.Errorf("delete agent messages: %w", err)
+	}
+	return nil
+}
+
 // TotalEventCount returns the total number of task events in the store.
 func (s *Store) TotalEventCount(ctx context.Context) (int64, error) {
 	var count int64
