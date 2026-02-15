@@ -7,7 +7,25 @@
 ✓ SetParentTask method exists
 ✓ Bus event publishing works
 ✓ Delegation tool uses polling
-✗ Coordinator package doesn't exist yet (will create in Phase 1)
+✗ Coordinator package doesn't exist yet (will create in Phase 2)
 
 ## Phase 1: Wire the Foundation
+✓ PASSED - Commit: f8dbec4
+
+**Changes:**
+- Added SetTaskContext, GetTaskContext, GetAllTaskContext methods
+- Added comprehensive tests for task context isolation
+- Wired parent_task_id into delegation (SetParentTask after task creation)
+- Added capability-based routing parameter to DelegateTaskInput
+- Supports either target_agent (specific) OR capability (routed)
+- Updated delegation input validation and test
+
+**Gate 1 Verification:**
+- ✓ just check: All 26 packages pass
+- ✓ go test -race ./...: All tests pass
+- ✓ Context store methods exist and tested
+- ✓ parent_task_id wired into delegation
+- ✓ Capability routing parameter added
+
+## Phase 2: Event-Driven Completion Tracking
 Starting...
