@@ -59,8 +59,12 @@ const (
 	schemaVersionV10  = 10
 	schemaChecksumV10 = "gc-v10-2026-02-15-team-workflows"
 
-	schemaVersionLatest  = schemaVersionV10
-	schemaChecksumLatest = schemaChecksumV10
+	// v0.4 schema v11: adds experiments and experiment_samples for A/B testing and analytics (PDR Phase 5).
+	schemaVersionV11  = 11
+	schemaChecksumV11 = "gc-v11-2026-02-15-experiments-analytics"
+
+	schemaVersionLatest  = schemaVersionV11
+	schemaChecksumLatest = schemaChecksumV11
 
 	defaultLeaseDuration = 30 * time.Second
 
@@ -389,6 +393,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		{schemaVersionV8, schemaChecksumV8},
 		{schemaVersionV9, schemaChecksumV9},
 		{schemaVersionV10, schemaChecksumV10},
+		{schemaVersionV11, schemaChecksumV11},
 	}
 	matched := false
 	for _, vc := range versionChecksums {
@@ -673,6 +678,42 @@ func (s *Store) initSchema(ctx context.Context) error {
 		}
 	}
 
+	// v11: Experiments and samples for A/B testing and analytics.
+	v11Statements := []string{
+		`CREATE TABLE IF NOT EXISTS experiments (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT,
+			status TEXT NOT NULL CHECK(status IN ('planning', 'running', 'completed', 'canceled')) DEFAULT 'planning',
+			hypothesis TEXT,
+			control_agent TEXT NOT NULL,
+			treatment_agent TEXT,
+			session_id TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			completed_at TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(session_id) REFERENCES sessions(id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS experiment_samples (
+			id TEXT PRIMARY KEY,
+			experiment_id TEXT NOT NULL,
+			variant TEXT NOT NULL CHECK(variant IN ('control', 'treatment')),
+			task_id TEXT,
+			success INTEGER NOT NULL DEFAULT 0,
+			duration_ms INTEGER,
+			cost_usd REAL NOT NULL DEFAULT 0.0,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(experiment_id) REFERENCES experiments(id),
+			FOREIGN KEY(task_id) REFERENCES tasks(id)
+		);`,
+	}
+	for _, stmt := range v11Statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "already exists") {
+			// Create tables if they don't exist, ignore "table already exists" errors
+			_, _ = tx.ExecContext(ctx, stmt)
+		}
+	}
+
 	// Phase 3: Indexes (may reference columns added by backfills).
 	indexStatements := []string{
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`,
@@ -696,6 +737,11 @@ func (s *Store) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_team_plans_session ON team_plans(session_id, created_at DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_team_plan_steps_plan ON team_plan_steps(plan_id, step_index);`,
 		`CREATE INDEX IF NOT EXISTS idx_team_plan_steps_status ON team_plan_steps(status, created_at DESC);`,
+		// v11: Indexes for experiments
+		`CREATE INDEX IF NOT EXISTS idx_experiments_session ON experiments(session_id, created_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_experiments_status ON experiments(status, created_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_experiment_samples_experiment ON experiment_samples(experiment_id, variant);`,
+		`CREATE INDEX IF NOT EXISTS idx_experiment_samples_task ON experiment_samples(task_id);`,
 	}
 
 	for _, stmt := range indexStatements {
@@ -3535,4 +3581,108 @@ func (s *Store) GetTeamPlanSteps(ctx context.Context, planID string) ([]*TeamPla
 		steps = append(steps, &s)
 	}
 	return steps, rows.Err()
+}
+
+// Experiment represents an A/B test or experiment (PDR Phase 5).
+type Experiment struct {
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Description      string     `json:"description"`
+	Status           string     `json:"status"` // planning, running, completed, canceled
+	Hypothesis       string     `json:"hypothesis"`
+	ControlAgent     string     `json:"control_agent"`
+	TreatmentAgent   string     `json:"treatment_agent"`
+	SessionID        string     `json:"session_id"`
+	CreatedAt        time.Time  `json:"created_at"`
+	CompletedAt      *time.Time `json:"completed_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+// ExperimentSample represents a single sample/trial in an experiment.
+type ExperimentSample struct {
+	ID           string    `json:"id"`
+	ExperimentID string    `json:"experiment_id"`
+	Variant      string    `json:"variant"` // control or treatment
+	TaskID       string    `json:"task_id"`
+	Success      int       `json:"success"` // 0 or 1
+	DurationMs   int       `json:"duration_ms"`
+	CostUSD      float64   `json:"cost_usd"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// CreateExperiment creates a new experiment.
+func (s *Store) CreateExperiment(ctx context.Context, exp *Experiment) error {
+	exp.ID = uuid.NewString()
+	exp.CreatedAt = time.Now()
+	exp.UpdatedAt = exp.CreatedAt
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO experiments (id, name, description, status, hypothesis, control_agent, treatment_agent, session_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		exp.ID, exp.Name, exp.Description, exp.Status, exp.Hypothesis, exp.ControlAgent, exp.TreatmentAgent, exp.SessionID, exp.CreatedAt, exp.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("create experiment: %w", err)
+	}
+	return nil
+}
+
+// RecordExperimentSample records a trial outcome for an experiment.
+func (s *Store) RecordExperimentSample(ctx context.Context, sample *ExperimentSample) error {
+	sample.ID = uuid.NewString()
+	sample.CreatedAt = time.Now()
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO experiment_samples (id, experiment_id, variant, task_id, success, duration_ms, cost_usd, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		sample.ID, sample.ExperimentID, sample.Variant, sample.TaskID, sample.Success, sample.DurationMs, sample.CostUSD, sample.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("record experiment sample: %w", err)
+	}
+	return nil
+}
+
+// ListExperimentsBySession lists all experiments for a session.
+func (s *Store) ListExperimentsBySession(ctx context.Context, sessionID string) ([]*Experiment, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, description, status, hypothesis, control_agent, treatment_agent, session_id, created_at, completed_at, updated_at
+		FROM experiments
+		WHERE session_id = ?
+		ORDER BY created_at DESC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("query experiments: %w", err)
+	}
+	defer rows.Close()
+
+	var exps []*Experiment
+	for rows.Next() {
+		var e Experiment
+		if err := rows.Scan(&e.ID, &e.Name, &e.Description, &e.Status, &e.Hypothesis, &e.ControlAgent, &e.TreatmentAgent, &e.SessionID, &e.CreatedAt, &e.CompletedAt, &e.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan experiment: %w", err)
+		}
+		exps = append(exps, &e)
+	}
+	return exps, rows.Err()
+}
+
+// GetExperimentSamples retrieves all samples for an experiment.
+func (s *Store) GetExperimentSamples(ctx context.Context, expID string) ([]*ExperimentSample, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, experiment_id, variant, task_id, success, duration_ms, cost_usd, created_at
+		FROM experiment_samples
+		WHERE experiment_id = ?
+		ORDER BY created_at ASC`, expID)
+	if err != nil {
+		return nil, fmt.Errorf("query experiment samples: %w", err)
+	}
+	defer rows.Close()
+
+	var samples []*ExperimentSample
+	for rows.Next() {
+		var s ExperimentSample
+		if err := rows.Scan(&s.ID, &s.ExperimentID, &s.Variant, &s.TaskID, &s.Success, &s.DurationMs, &s.CostUSD, &s.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan experiment sample: %w", err)
+		}
+		samples = append(samples, &s)
+	}
+	return samples, rows.Err()
 }
