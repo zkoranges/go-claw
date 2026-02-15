@@ -579,6 +579,22 @@ func (s *Store) initSchema(ctx context.Context) error {
 			read_at DATETIME,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
+		// v13: Agent memories with relevance scoring.
+		`CREATE TABLE IF NOT EXISTS agent_memories (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id        TEXT    NOT NULL,
+			key             TEXT    NOT NULL,
+			value           TEXT    NOT NULL,
+			source          TEXT    DEFAULT 'user',
+			relevance_score REAL    DEFAULT 1.0,
+			access_count    INTEGER DEFAULT 0,
+			created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+			updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+			last_accessed   TEXT    NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(agent_id, key)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_memories_agent ON agent_memories(agent_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_memories_relevance ON agent_memories(agent_id, relevance_score DESC);`,
 		// v9: Observability tables for metrics and activity logging.
 		`CREATE TABLE IF NOT EXISTS task_metrics (
 			task_id       TEXT PRIMARY KEY,

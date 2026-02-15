@@ -116,6 +116,14 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		fmt.Fprintln(out, "    /plan [<name>]               Run a configured plan (GC-SPEC-PDR-v4-Phase-4)")
 		fmt.Fprintln(out, "    /plans                       Show active plan executions (any key to exit)")
 		fmt.Fprintln(out, "    /session                     Show current session ID")
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  Memory & Context:")
+		fmt.Fprintln(out, "    /memory list                 List stored facts for current agent")
+		fmt.Fprintln(out, "    /memory search <query>       Search agent memory")
+		fmt.Fprintln(out, "    /memory delete <key>         Remove a stored fact")
+		fmt.Fprintln(out, "    /remember <key> <value>      Store a fact")
+		fmt.Fprintln(out, "    /forget <key>                Remove a fact")
+		fmt.Fprintln(out, "    /clear                       Clear conversation history")
 		fmt.Fprintln(out, "    /quit                        Exit the chat")
 		fmt.Fprintln(out)
 
@@ -173,6 +181,18 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		// GC-SPEC-PDR-v4-Phase-4: Plan system command.
 		fmt.Fprintln(out, "  /plan command: Plans loaded from config.yaml")
 		fmt.Fprintln(out)
+
+	case "/memory":
+		handleMemoryCommand(arg, cc, out)
+
+	case "/remember":
+		handleRememberCommand(arg, cc, out)
+
+	case "/forget":
+		handleForgetCommand(arg, cc, out)
+
+	case "/clear":
+		handleClearCommand(cc, sessionID, out)
 
 	default:
 		fmt.Fprintf(out, "  Unknown command: %s (type /help for available commands)\n\n", cmd)
@@ -859,4 +879,173 @@ func maskValue(v string) string {
 		return "****"
 	}
 	return v[:4] + strings.Repeat("*", len(v)-4)
+}
+
+// handleMemoryCommand processes /memory subcommands (list, search, delete, clear).
+func handleMemoryCommand(arg string, cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	parts := strings.SplitN(arg, " ", 2)
+	subcmd := strings.ToLower(parts[0])
+	subarg := ""
+	if len(parts) > 1 {
+		subarg = strings.TrimSpace(parts[1])
+	}
+
+	ctx := context.Background()
+	agentID := cc.CurrentAgent
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	switch subcmd {
+	case "list":
+		memories, err := cc.Store.ListMemories(ctx, agentID)
+		if err != nil {
+			fmt.Fprintf(out, "  Error loading memories: %v\n\n", err)
+			return
+		}
+		if len(memories) == 0 {
+			fmt.Fprintln(out, "  No stored facts.")
+		} else {
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "  Stored Facts (by relevance):")
+			for _, m := range memories {
+				fmt.Fprintf(out, "    • %s: %s [relevance: %.2f, access: %d]\n",
+					m.Key, m.Value, m.RelevanceScore, m.AccessCount)
+			}
+		}
+		fmt.Fprintln(out)
+
+	case "search":
+		if subarg == "" {
+			fmt.Fprintln(out, "  Usage: /memory search <query>")
+			fmt.Fprintln(out)
+			return
+		}
+		results, err := cc.Store.SearchMemories(ctx, agentID, subarg)
+		if err != nil {
+			fmt.Fprintf(out, "  Error searching: %v\n\n", err)
+			return
+		}
+		if len(results) == 0 {
+			fmt.Fprintf(out, "  No results for '%s'.\n\n", subarg)
+		} else {
+			fmt.Fprintln(out)
+			fmt.Fprintf(out, "  Results for '%s':\n", subarg)
+			for _, m := range results {
+				fmt.Fprintf(out, "    • %s: %s\n", m.Key, m.Value)
+			}
+			fmt.Fprintln(out)
+		}
+
+	case "delete":
+		if subarg == "" {
+			fmt.Fprintln(out, "  Usage: /memory delete <key>")
+			fmt.Fprintln(out)
+			return
+		}
+		if err := cc.Store.DeleteMemory(ctx, agentID, subarg); err != nil {
+			fmt.Fprintf(out, "  Error deleting: %v\n\n", err)
+			return
+		}
+		fmt.Fprintf(out, "  Deleted fact: %s\n\n", subarg)
+
+	case "clear":
+		if err := cc.Store.DeleteAgentMemories(ctx, agentID); err != nil {
+			fmt.Fprintf(out, "  Error clearing: %v\n\n", err)
+			return
+		}
+		fmt.Fprintln(out, "  All memories cleared.")
+		fmt.Fprintln(out)
+
+	default:
+		fmt.Fprintln(out, "  Usage: /memory list | search <query> | delete <key> | clear")
+		fmt.Fprintln(out)
+	}
+}
+
+// handleRememberCommand processes /remember <key> <value>.
+func handleRememberCommand(arg string, cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	parts := strings.SplitN(arg, " ", 2)
+	if len(parts) < 2 {
+		fmt.Fprintln(out, "  Usage: /remember <key> <value>")
+		fmt.Fprintln(out)
+		return
+	}
+
+	key := strings.TrimSpace(parts[0])
+	value := strings.TrimSpace(parts[1])
+
+	ctx := context.Background()
+	agentID := cc.CurrentAgent
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	if err := cc.Store.SetMemory(ctx, agentID, key, value, "user"); err != nil {
+		fmt.Fprintf(out, "  Error saving: %v\n\n", err)
+		return
+	}
+	fmt.Fprintf(out, "  📝 Remembered: %s = %s\n\n", key, value)
+}
+
+// handleForgetCommand processes /forget <key>.
+func handleForgetCommand(arg string, cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		fmt.Fprintln(out, "  Usage: /forget <key>")
+		fmt.Fprintln(out)
+		return
+	}
+
+	ctx := context.Background()
+	agentID := cc.CurrentAgent
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	if err := cc.Store.DeleteMemory(ctx, agentID, arg); err != nil {
+		fmt.Fprintf(out, "  Error deleting: %v\n\n", err)
+		return
+	}
+	fmt.Fprintf(out, "  Forgot: %s\n\n", arg)
+}
+
+// handleClearCommand processes /clear.
+func handleClearCommand(cc *ChatConfig, sessionID string, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	ctx := context.Background()
+	agentID := cc.CurrentAgent
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	if err := cc.Store.DeleteAgentMessages(ctx, agentID, sessionID); err != nil {
+		fmt.Fprintf(out, "  Error clearing: %v\n\n", err)
+		return
+	}
+	fmt.Fprintln(out, "  Conversation history cleared.")
+	fmt.Fprintln(out)
 }

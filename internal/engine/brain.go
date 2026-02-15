@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/basket/go-claw/internal/config"
+	"github.com/basket/go-claw/internal/memory"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/basket/go-claw/internal/safety"
@@ -456,6 +457,36 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 			systemPrompt = systemPrompt + "\n\n" + formatSkillInjection(entry.Name, entry.Instructions)
 		}
 	}
+
+	// Inject core memory block (top memories by relevance)
+	if topMemories, err := b.store.ListTopMemories(ctx, agentID, 10); err == nil && len(topMemories) > 0 {
+		// Convert to memory.KeyValue format
+		var kvs []memory.KeyValue
+		for _, m := range topMemories {
+			kvs = append(kvs, memory.KeyValue{
+				Key:            m.Key,
+				Value:          m.Value,
+				RelevanceScore: m.RelevanceScore,
+			})
+			// Touch each memory to update access stats (non-blocking)
+			go func(k string) {
+				_ = b.store.TouchMemory(ctx, agentID, k)
+			}(m.Key)
+		}
+		coreBlock := memory.NewCoreMemoryBlock(kvs)
+		if formatted := coreBlock.Format(); formatted != "" {
+			systemPrompt = systemPrompt + "\n\n" + formatted
+		}
+	} else if err != nil && agentID != shared.DefaultAgentID {
+		slog.Warn("failed to load core memories", "agent_id", agentID, "error", err)
+	}
+
+	// Decay memories once per session start (factor 0.95 = 5% decay)
+	// Run async to not block response
+	go func() {
+		_ = b.store.DecayMemories(ctx, agentID, 0.95)
+	}()
+
 	// Escape % characters to prevent fmt.Sprintf corruption in ai.WithSystem().
 	systemPrompt = strings.ReplaceAll(systemPrompt, "%", "%%")
 	opts = append(opts, ai.WithSystem(systemPrompt))
