@@ -595,6 +595,22 @@ func (s *Store) initSchema(ctx context.Context) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_memories_agent ON agent_memories(agent_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_memories_relevance ON agent_memories(agent_id, relevance_score DESC);`,
+		// v14: Agent pinned files and text for context injection.
+		`CREATE TABLE IF NOT EXISTS agent_pins (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id    TEXT    NOT NULL,
+			pin_type    TEXT    NOT NULL,
+			source      TEXT    NOT NULL,
+			content     TEXT    NOT NULL,
+			token_count INTEGER DEFAULT 0,
+			shared      INTEGER DEFAULT 0,
+			last_read   TEXT    NOT NULL DEFAULT (datetime('now')),
+			file_mtime  TEXT    DEFAULT '',
+			created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(agent_id, source)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_pins_agent ON agent_pins(agent_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_pins_shared ON agent_pins(shared) WHERE shared = 1;`,
 		// v9: Observability tables for metrics and activity logging.
 		`CREATE TABLE IF NOT EXISTS task_metrics (
 			task_id       TEXT PRIMARY KEY,
