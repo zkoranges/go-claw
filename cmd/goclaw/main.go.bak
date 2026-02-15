@@ -655,6 +655,15 @@ The system runs this checklist periodically to ensure health.
 					_ = store.RecordPolicyVersion(context.Background(), newVer, newVer, ev.Path)
 					logger.Info("policy.yaml hot-reloaded", "policy_version", newVer)
 				}
+			case "config.yaml":
+				newCfg, err := config.Load()
+				if err != nil {
+					logger.Error("failed to reload config.yaml", "error", err)
+					break
+				}
+				reconcileAgents(ctx, registry, newCfg.Agents, cfg.Agents, cfg.HomeDir, logger)
+				cfg.Agents = newCfg.Agents
+				logger.Info("config.yaml agents hot-reloaded")
 			}
 		}
 	}()
