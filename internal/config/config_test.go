@@ -102,8 +102,10 @@ func TestLoad_DefaultsApplied(t *testing.T) {
 	if cfg.LLMProvider != "google" {
 		t.Fatalf("expected default llm_provider=google, got %q", cfg.LLMProvider)
 	}
-	if cfg.GeminiModel != "gemini-2.5-flash" {
-		t.Fatalf("expected default gemini_model=gemini-2.5-flash, got %q", cfg.GeminiModel)
+	// Default should be the first model from BuiltinModels
+	expectedDefault := config.BuiltinModels["google"][0].ID
+	if cfg.GeminiModel != expectedDefault {
+		t.Fatalf("expected default gemini_model=%s, got %q", expectedDefault, cfg.GeminiModel)
 	}
 	if cfg.BindAddr != "127.0.0.1:18789" {
 		t.Fatalf("expected default bind_addr=127.0.0.1:18789, got %q", cfg.BindAddr)

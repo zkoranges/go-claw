@@ -694,7 +694,7 @@ func handleModelCommand(arg string, cc *ChatConfig, out io.Writer) {
 		fmt.Fprintln(out)
 		// Show all providers and their models.
 		for _, bp := range builtinProviders {
-			models := BuiltinModels[bp.ID]
+			models := config.BuiltinModels[bp.ID]
 			if len(models) == 0 {
 				continue
 			}
@@ -711,10 +711,10 @@ func handleModelCommand(arg string, cc *ChatConfig, out io.Writer) {
 		// Show custom providers from config.
 		if cc.Cfg != nil && cc.Cfg.Providers != nil {
 			for id, pc := range cc.Cfg.Providers {
-				if _, isBuiltin := BuiltinModels[id]; isBuiltin {
+				if _, isBuiltin := config.BuiltinModels[id]; isBuiltin {
 					// Show user-added models for built-in providers.
 					existing := make(map[string]bool)
-					for _, m := range BuiltinModels[id] {
+					for _, m := range config.BuiltinModels[id] {
 						existing[m.ID] = true
 					}
 					var extra []string

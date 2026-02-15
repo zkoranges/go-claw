@@ -363,7 +363,7 @@ func providerLabel(id string) string {
 }
 
 func modelsForProvider(providerID string) []modelDef {
-	if models, ok := BuiltinModels[providerID]; ok {
+	if models, ok := config.BuiltinModels[providerID]; ok {
 		return models
 	}
 	return nil
@@ -656,7 +656,12 @@ func (m genesisModel) generateConfig() string {
 	}
 	model := m.modelID
 	if model == "" {
-		model = "gemini-2.5-flash"
+		// Should never happen (wizard forces selection), but defensive fallback
+		if models, ok := config.BuiltinModels["google"]; ok && len(models) > 0 {
+			model = models[0].ID
+		} else {
+			model = "gemini-2.5-flash" // Emergency fallback
+		}
 	}
 
 	var b strings.Builder

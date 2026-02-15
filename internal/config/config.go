@@ -12,6 +12,41 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ModelDef describes a model entry in the built-in models list.
+type ModelDef struct {
+	ID   string
+	Desc string
+}
+
+// BuiltinModels maps provider IDs to their built-in model lists.
+// This is the single source of truth for available models across all packages.
+var BuiltinModels = map[string][]ModelDef{
+	"google": {
+		{"gemini-3-pro-preview", "Most capable, advanced reasoning"},
+		{"gemini-3-flash-preview", "Balanced speed + frontier intelligence"},
+		{"gemini-2.5-pro", "Strong reasoning, complex STEM tasks"},
+		{"gemini-2.5-flash", "Fast, cost-effective"},
+		{"gemini-2.5-flash-lite", "Ultra-fast, lowest cost"},
+	},
+	"anthropic": {
+		{"claude-opus-4-6", "Most capable"},
+		{"claude-sonnet-4-5-20250929", "Balanced performance"},
+		{"claude-haiku-4-5-20251001", "Fast, cost-effective"},
+	},
+	"openai": {
+		{"o3", "Advanced reasoning"},
+		{"o4-mini", "Fast reasoning"},
+		{"gpt-4o", "Versatile, multimodal"},
+		{"gpt-4o-mini", "Fast, cost-effective"},
+	},
+	"openrouter": {
+		{"anthropic/claude-sonnet-4-5-20250929", "Claude Sonnet (via OpenRouter)"},
+		{"openai/gpt-4o", "GPT-4o (via OpenRouter)"},
+		{"meta-llama/llama-3.1-70b-instruct", "Llama 3.1 70B"},
+		{"mistralai/mistral-large-latest", "Mistral Large"},
+	},
+}
+
 // ProviderConfig holds per-provider settings for multi-provider LLM support.
 type ProviderConfig struct {
 	APIKey  string   `yaml:"api_key"`
@@ -448,7 +483,12 @@ func normalize(cfg *Config) {
 		cfg.LLMProvider = "google"
 	}
 	if cfg.GeminiModel == "" {
-		cfg.GeminiModel = "gemini-2.5-flash"
+		// Use first model from BuiltinModels as default
+		if models, ok := BuiltinModels["google"]; ok && len(models) > 0 {
+			cfg.GeminiModel = models[0].ID
+		} else {
+			cfg.GeminiModel = "gemini-2.5-flash" // Emergency fallback (should never happen)
+		}
 	}
 	if strings.TrimSpace(cfg.Skills.ProjectDir) == "" {
 		cfg.Skills.ProjectDir = "./skills"

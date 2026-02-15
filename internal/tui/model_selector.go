@@ -15,46 +15,14 @@ type providerDef struct {
 	Label string
 }
 
-// modelDef describes a model entry in the selector.
-type modelDef struct {
-	ID   string
-	Desc string
-}
+// modelDef is a local alias for config.ModelDef for backward compatibility.
+type modelDef = config.ModelDef
 
 var builtinProviders = []providerDef{
 	{ID: "google", Label: "Google Gemini"},
 	{ID: "anthropic", Label: "Anthropic"},
 	{ID: "openai", Label: "OpenAI"},
 	{ID: "openrouter", Label: "OpenRouter (100+ models)"},
-}
-
-// BuiltinModels maps provider IDs to their built-in model lists.
-// Exported so /model list can use the same data source.
-var BuiltinModels = map[string][]modelDef{
-	"google": {
-		{"gemini-3-pro-preview", "Most capable, advanced reasoning"},
-		{"gemini-3-flash-preview", "Balanced speed + frontier intelligence"},
-		{"gemini-2.5-pro", "Strong reasoning, complex STEM tasks"},
-		{"gemini-2.5-flash", "Fast, cost-effective"},
-		{"gemini-2.5-flash-lite", "Ultra-fast, lowest cost"},
-	},
-	"anthropic": {
-		{"claude-opus-4-6", "Most capable"},
-		{"claude-sonnet-4-5-20250929", "Balanced performance"},
-		{"claude-haiku-4-5-20251001", "Fast, cost-effective"},
-	},
-	"openai": {
-		{"o3", "Advanced reasoning"},
-		{"o4-mini", "Fast reasoning"},
-		{"gpt-4o", "Versatile, multimodal"},
-		{"gpt-4o-mini", "Fast, cost-effective"},
-	},
-	"openrouter": {
-		{"anthropic/claude-sonnet-4-5-20250929", "Claude Sonnet (via OpenRouter)"},
-		{"openai/gpt-4o", "GPT-4o (via OpenRouter)"},
-		{"meta-llama/llama-3.1-70b-instruct", "Llama 3.1 70B"},
-		{"mistralai/mistral-large-latest", "Mistral Large"},
-	},
 }
 
 type selectorStep int
@@ -116,7 +84,7 @@ func buildSelectorData(cfg *config.Config) ([]providerEntry, map[string][]modelD
 
 	// Build merged model lists.
 	models := make(map[string][]modelDef)
-	for id, builtins := range BuiltinModels {
+	for id, builtins := range config.BuiltinModels {
 		models[id] = append([]modelDef{}, builtins...)
 	}
 	if cfg.Providers != nil {

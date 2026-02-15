@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/basket/go-claw/internal/config"
 )
 
 // TestGenesisFlow_FullWizardEndToEnd exercises every step of the genesis wizard
@@ -58,7 +60,7 @@ func TestGenesisFlow_FullWizardEndToEnd(t *testing.T) {
 	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	assertStep(t, m, stepAPIKey, "expected stepAPIKey after model")
 
-	expectedModelID := BuiltinModels["anthropic"][0].ID
+	expectedModelID := config.BuiltinModels["anthropic"][0].ID
 	if m.modelID != expectedModelID {
 		t.Fatalf("expected modelID=%q, got %q", expectedModelID, m.modelID)
 	}

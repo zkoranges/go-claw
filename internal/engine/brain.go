@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/basket/go-claw/internal/config"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/basket/go-claw/internal/safety"
@@ -311,18 +312,18 @@ func NewGenkitBrain(ctx context.Context, store *persistence.Store, cfg BrainConf
 }
 
 func defaultModelForProvider(provider string) string {
-	switch provider {
-	case "anthropic":
-		return "claude-3-5-sonnet-20241022"
-	case "openai":
-		return "gpt-4o-mini"
-	case "openai_compatible":
-		return "gpt-4o-mini"
-	case "openrouter":
-		return "anthropic/claude-sonnet-4-5-20250929"
-	default:
-		return "gemini-2.5-flash"
+	// Normalize openai_compatible to openai for BuiltinModels lookup
+	if provider == "openai_compatible" {
+		provider = "openai"
 	}
+
+	// Use the first model from BuiltinModels as the default.
+	// If no models are defined for the provider, return empty string.
+	models, ok := config.BuiltinModels[provider]
+	if !ok || len(models) == 0 {
+		return "" // No default available, fail gracefully
+	}
+	return models[0].ID // First model = most capable
 }
 
 func envAPIKeyForProvider(provider string) string {
