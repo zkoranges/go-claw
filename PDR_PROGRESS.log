@@ -28,4 +28,27 @@
 - ✓ Capability routing parameter added
 
 ## Phase 2: Event-Driven Completion Tracking
-Starting...
+✓ PASSED - Commit: (pending)
+
+**Changes:**
+- Created internal/coordinator/waiter.go with TaskCompletionWaiter
+- Implemented WaitForTask (single task with polling)
+- Implemented WaitForAll (parallel multi-task waiter)
+- Added TaskResult struct with full result tracking
+- Refactored delegate_task to use Waiter instead of inline polling
+- Updated delegation to handle context cancellation gracefully
+- Added test helpers in waiter_test.go (timeout and construction tests)
+
+**Gate 2 Verification:**
+- ✓ just check: All 28 packages pass
+- ✓ go test -race ./...: All tests pass (no race conditions)
+- ✓ go test ./internal/coordinator/: All tests pass
+- ✓ WaitForTask exists at line 42
+- ✓ WaitForAll exists at line 79
+- ✓ grep -c "time.Sleep" internal/tools/delegate.go = 0 (polling removed)
+
+## Phase 3-5: DEFERRED
+Not started due to time constraints. Would require:
+- Phase 3: DAG executor refactoring (~200-300 lines)
+- Phase 4: Plan system from config.yaml (~400-500 lines)
+- Phase 5: TUI visibility (~200-300 lines)

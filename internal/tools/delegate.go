@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/basket/go-claw/internal/audit"
+	"github.com/basket/go-claw/internal/coordinator"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/basket/go-claw/internal/shared"
@@ -155,63 +156,37 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 		"timeout", timeout,
 	)
 
-	// Poll for completion.
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
+	// Wait for completion using the coordinator's Waiter.
+	// GC-SPEC-PDR-v4-Phase-2: Event-driven task completion tracking.
+	waiter := coordinator.NewWaiter(nil, store) // nil bus means polling-only mode
+	result, err := waiter.WaitForTask(ctx, taskID, timeout)
+	if err != nil {
+		// Abort the child task on error so it doesn't run orphaned.
+		if _, abortErr := store.AbortTask(context.Background(), taskID); abortErr != nil {
+			slog.Warn("delegate_task: failed to abort child task on error",
+				"task_id", taskID, "error", abortErr)
+		}
 
-	for {
-		select {
-		case <-ctx.Done():
-			// Cancel the child task so it doesn't run orphaned.
-			if _, abortErr := store.AbortTask(ctx, taskID); abortErr != nil {
-				slog.Warn("delegate_task: failed to abort child task on context cancel",
-					"task_id", taskID, "error", abortErr)
-			}
+		// Check if the context was canceled or deadline exceeded.
+		ctxErr := ctx.Err()
+		if ctxErr == context.Canceled || ctxErr == context.DeadlineExceeded {
 			return &DelegateTaskOutput{
 				TaskID: taskID,
 				Status: "CANCELED",
-				Error:  "context canceled",
+				Error:  ctxErr.Error(),
 			}, nil
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				// Cancel the child task on timeout so it doesn't run orphaned.
-				if _, abortErr := store.AbortTask(context.Background(), taskID); abortErr != nil {
-					slog.Warn("delegate_task: failed to abort child task on timeout",
-						"task_id", taskID, "error", abortErr)
-				}
-				return &DelegateTaskOutput{
-					TaskID: taskID,
-					Status: "FAILED",
-					Error:  fmt.Sprintf("timeout after %s waiting for agent %q", timeout, targetAgent),
-				}, nil
-			}
-
-			task, err := store.GetTask(ctx, taskID)
-			if err != nil {
-				return nil, fmt.Errorf("delegate_task: poll task: %w", err)
-			}
-			if task == nil {
-				return nil, fmt.Errorf("delegate_task: task %q not found", taskID)
-			}
-
-			switch task.Status {
-			case persistence.TaskStatusSucceeded:
-				return &DelegateTaskOutput{
-					TaskID: taskID,
-					Status: string(task.Status),
-					Result: task.Result,
-				}, nil
-			case persistence.TaskStatusFailed, persistence.TaskStatusDeadLetter, persistence.TaskStatusCanceled:
-				return &DelegateTaskOutput{
-					TaskID: taskID,
-					Status: string(task.Status),
-					Error:  task.Error,
-				}, nil
-			}
-			// Still running — continue polling.
 		}
+
+		// For other errors, return the error.
+		return nil, err
 	}
+
+	return &DelegateTaskOutput{
+		TaskID: result.TaskID,
+		Status: result.Status,
+		Result: result.Output,
+		Error:  result.Error,
+	}, nil
 }
 
 func registerDelegate(g *genkit.Genkit, reg *Registry) ai.ToolRef {

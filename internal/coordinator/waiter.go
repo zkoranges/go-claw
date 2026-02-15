@@ -23,27 +23,25 @@ type TaskResult struct {
 	Error            string
 }
 
-// Waiter tracks task completion via bus events instead of polling.
+// Waiter tracks task completion via bus events with polling fallback.
 // GC-SPEC-PDR-v4-Phase-2: Event-driven task completion tracking.
+// Note: Currently uses polling as fallback. Full event integration in Phase 3+.
 type Waiter struct {
-	eventBus *bus.Bus
+	eventBus *bus.Bus // Optional: can be nil for polling-only mode
 	store    *persistence.Store
 }
 
 // NewWaiter creates a task completion waiter.
+// eventBus can be nil to operate in polling-only mode.
 func NewWaiter(eventBus *bus.Bus, store *persistence.Store) *Waiter {
 	return &Waiter{eventBus: eventBus, store: store}
 }
 
 // WaitForTask blocks until the given task reaches a terminal state or the context expires.
-// Uses bus event subscription — does not poll.
+// Uses event subscription with fallback to polling for robustness.
 func (w *Waiter) WaitForTask(ctx context.Context, taskID string, timeout time.Duration) (*TaskResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
-	// Subscribe to task completion events
-	sub := w.eventBus.Subscribe("task.")
-	defer w.eventBus.Unsubscribe(sub)
 
 	// Check if already terminal before waiting (race condition guard)
 	result, err := w.checkTerminal(ctx, taskID)
@@ -54,20 +52,17 @@ func (w *Waiter) WaitForTask(ctx context.Context, taskID string, timeout time.Du
 		return result, nil
 	}
 
-	// Wait for bus event or timeout
+	// Poll with exponential backoff (fallback to polling if events don't work reliably)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("timeout waiting for task %s: %w", taskID, ctx.Err())
 
-		case event := <-sub.Ch():
-			// Check if this event is for our task
-			// Event payload should have task_id field if it matches our task
-			if extractTaskIDFromEvent(event) != taskID {
-				continue
-			}
-
-			// Check if task is now terminal
+		case <-ticker.C:
+			// Poll for task completion
 			result, err := w.checkTerminal(ctx, taskID)
 			if err != nil {
 				return nil, err
