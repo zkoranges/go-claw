@@ -76,7 +76,8 @@ internal/
 
 ## Testing Patterns
 
-- 253 tests across 30 files, 22 internal packages
+- **CRITICAL: Zero API credits from tests.** All tests run offline with no real API calls. Brain tests set `GEMINI_API_KEY=""` to force `llmOn=false` (fallback mode). No E2E tests that consume API budgets.
+- 253+ tests across 28 packages, all passing, all offline, zero API costs
 - Session IDs must be valid UUIDs — tests fail with non-UUID session IDs
 - `ClaimNextPendingTask` orders by `priority DESC, created_at ASC, id ASC`
 - `defaultMaxAttempts = 3` — tasks dead-letter after 3 failures
