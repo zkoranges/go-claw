@@ -30,8 +30,9 @@ const (
 )
 
 type chatEntry struct {
-	role chatRole
-	text string
+	role    chatRole
+	text    string
+	agentID string // Which agent sent this message (for assistant messages)
 }
 
 type brainReplyMsg struct {
@@ -580,7 +581,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.history = append(m.history, chatEntry{role: chatRoleAssistant, text: msg.reply})
+		m.history = append(m.history, chatEntry{role: chatRoleAssistant, text: msg.reply, agentID: m.cc.CurrentAgent})
 		if m.cc.Store != nil {
 			_ = m.cc.Store.AddHistory(m.ctx, m.sessionID, m.cc.CurrentAgent, "assistant", msg.reply, tokenutil.EstimateTokens(msg.reply))
 		}
@@ -708,7 +709,25 @@ func (m chatModel) renderHistoryLines() []string {
 			// Highlight @mentions in cyan
 			text = HighlightMention(text)
 		case chatRoleAssistant:
-			prefix = m.agentPrefix + ": "
+			// Use the agent ID stored with the message, not the current agent.
+			// Fall back to agentID itself if no agent info available.
+			if e.agentID != "" && m.cc.Switcher != nil {
+				_, agentName, agentEmoji, err := m.cc.Switcher.SwitchAgent(e.agentID)
+				if err == nil {
+					if agentEmoji != "" {
+						prefix = fmt.Sprintf("%s %s: ", agentEmoji, agentName)
+					} else {
+						prefix = fmt.Sprintf("%s: ", agentName)
+					}
+				} else {
+					prefix = fmt.Sprintf("%s: ", e.agentID)
+				}
+			} else if e.agentID != "" {
+				prefix = fmt.Sprintf("%s: ", e.agentID)
+			} else {
+				// Fallback for messages without agentID (backward compat)
+				prefix = m.agentPrefix + ": "
+			}
 		}
 
 		lines = append(lines, m.wrapWithPrefix(text, prefix)...)
