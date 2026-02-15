@@ -11,6 +11,7 @@ import (
 	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/config"
 	"github.com/basket/go-claw/internal/engine"
+	"github.com/basket/go-claw/internal/memory"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/basket/go-claw/internal/tools"
@@ -193,6 +194,15 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 
 	case "/clear":
 		handleClearCommand(cc, sessionID, out)
+
+	case "/pin":
+		handlePinCommand(arg, cc, out)
+
+	case "/unpin":
+		handleUnpinCommand(arg, cc, out)
+
+	case "/pinned":
+		handlePinnedCommand(cc, out)
 
 	default:
 		fmt.Fprintf(out, "  Unknown command: %s (type /help for available commands)\n\n", cmd)
@@ -1047,5 +1057,114 @@ func handleClearCommand(cc *ChatConfig, sessionID string, out io.Writer) {
 		return
 	}
 	fmt.Fprintln(out, "  Conversation history cleared.")
+	fmt.Fprintln(out)
+}
+
+// handlePinCommand processes /pin <filepath> or /pin text <label> <content>.
+func handlePinCommand(arg string, cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		fmt.Fprintln(out, "  Usage: /pin <filepath> or /pin text <label> <content>")
+		fmt.Fprintln(out)
+		return
+	}
+
+	ctx := context.Background()
+	agentID := cc.CurrentAgent
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	// Check if it's a text pin
+	if strings.HasPrefix(arg, "text ") {
+		parts := strings.SplitN(strings.TrimPrefix(arg, "text "), " ", 2)
+		if len(parts) < 2 {
+			fmt.Fprintln(out, "  Usage: /pin text <label> <content>")
+			fmt.Fprintln(out)
+			return
+		}
+		label, content := parts[0], parts[1]
+		if err := cc.Store.AddPin(ctx, agentID, "text", label, content, false); err != nil {
+			fmt.Fprintf(out, "  Error pinning text: %v\n\n", err)
+			return
+		}
+		fmt.Fprintf(out, "  Pinned text: %s\n\n", label)
+		return
+	}
+
+	// File pin
+	filepath := arg
+	pinMgr := memory.NewPinManager(cc.Store)
+	if err := pinMgr.AddFilePin(ctx, agentID, filepath, false); err != nil {
+		fmt.Fprintf(out, "  Error pinning file: %v\n\n", err)
+		return
+	}
+	fmt.Fprintf(out, "  Pinned file: %s\n\n", filepath)
+}
+
+// handleUnpinCommand processes /unpin <source>.
+func handleUnpinCommand(arg string, cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		fmt.Fprintln(out, "  Usage: /unpin <source>")
+		fmt.Fprintln(out)
+		return
+	}
+
+	ctx := context.Background()
+	agentID := cc.CurrentAgent
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	if err := cc.Store.RemovePin(ctx, agentID, arg); err != nil {
+		fmt.Fprintf(out, "  Error unpinning: %v\n\n", err)
+		return
+	}
+	fmt.Fprintf(out, "  Unpinned: %s\n\n", arg)
+}
+
+// handlePinnedCommand processes /pinned.
+func handlePinnedCommand(cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	ctx := context.Background()
+	agentID := cc.CurrentAgent
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	pins, err := cc.Store.ListPins(ctx, agentID)
+	if err != nil {
+		fmt.Fprintf(out, "  Error listing pins: %v\n\n", err)
+		return
+	}
+
+	if len(pins) == 0 {
+		fmt.Fprintln(out, "  No pinned files or text.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	fmt.Fprintf(out, "  Pinned context for @%s (%d items):\n", agentID, len(pins))
+	for _, pin := range pins {
+		fmt.Fprintf(out, "    • %s (%s) - %d tokens\n", pin.Source, pin.PinType, pin.TokenCount)
+	}
 	fmt.Fprintln(out)
 }
