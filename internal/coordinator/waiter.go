@@ -43,7 +43,14 @@ func (w *Waiter) WaitForTask(ctx context.Context, taskID string, timeout time.Du
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Check if already terminal before waiting (race condition guard)
+	// 1. Subscribe FIRST to avoid missing events between the DB check and the wait loop.
+	var sub *bus.Subscription
+	if w.eventBus != nil {
+		sub = w.eventBus.Subscribe("task.")
+		defer w.eventBus.Unsubscribe(sub)
+	}
+
+	// 2. Check if already terminal (handles cases where task finished before we subscribed).
 	result, err := w.checkTerminal(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -52,8 +59,13 @@ func (w *Waiter) WaitForTask(ctx context.Context, taskID string, timeout time.Du
 		return result, nil
 	}
 
-	// Poll with exponential backoff (fallback to polling if events don't work reliably)
-	ticker := time.NewTicker(100 * time.Millisecond)
+	// 3. Wait for events or poll (fallback).
+	// We use a slower ticker (1s) to reduce DB load, relying on events for low latency.
+	tickerInterval := 1 * time.Second
+	if w.eventBus == nil {
+		tickerInterval = 100 * time.Millisecond // fast polling if no bus
+	}
+	ticker := time.NewTicker(tickerInterval)
 	defer ticker.Stop()
 
 	for {
@@ -62,7 +74,7 @@ func (w *Waiter) WaitForTask(ctx context.Context, taskID string, timeout time.Du
 			return nil, fmt.Errorf("timeout waiting for task %s: %w", taskID, ctx.Err())
 
 		case <-ticker.C:
-			// Poll for task completion
+			// Poll for task completion (fallback)
 			result, err := w.checkTerminal(ctx, taskID)
 			if err != nil {
 				return nil, err
@@ -70,8 +82,51 @@ func (w *Waiter) WaitForTask(ctx context.Context, taskID string, timeout time.Du
 			if result != nil {
 				return result, nil
 			}
+
+		case event, ok := <-func() <-chan bus.Event {
+			if sub == nil {
+				return nil
+			}
+			return sub.Ch()
+		}():
+			if !ok {
+				// Subscription closed unexpectedly, fall back to polling loop
+				sub = nil
+				continue
+			}
+			// Check if event is relevant to our task
+			if isEventForTask(event, taskID) {
+				// We got a relevant event, check DB to be sure and get full result
+				result, err := w.checkTerminal(ctx, taskID)
+				if err != nil {
+					return nil, err
+				}
+				if result != nil {
+					return result, nil
+				}
+			}
 		}
 	}
+}
+
+func isEventForTask(event bus.Event, taskID string) bool {
+	// Check struct-based events
+	switch e := event.Payload.(type) {
+	case bus.TaskStateChangedEvent:
+		return e.TaskID == taskID
+	case bus.TaskMetricsEvent:
+		return e.TaskID == taskID
+	case bus.TaskTokensEvent:
+		return e.TaskID == taskID
+	}
+
+	// Check legacy/map-based events
+	if eventMap, ok := event.Payload.(map[string]interface{}); ok {
+		if id, ok := eventMap["task_id"].(string); ok {
+			return id == taskID
+		}
+	}
+	return false
 }
 
 // WaitForAll waits for multiple tasks to complete. Returns results for all tasks.

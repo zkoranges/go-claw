@@ -17,12 +17,12 @@ type Event struct {
 
 // Task event topics.
 const (
-	TopicTaskStateChanged  = "task.state_changed"
-	TopicTaskMetrics       = "task.metrics"
-	TopicTaskTokens        = "task.tokens"
-	TopicTaskCompleted     = "task.completed"
-	TopicTaskFailed        = "task.failed"
-	TopicTaskRetrying      = "task.retrying"
+	TopicTaskStateChanged = "task.state_changed"
+	TopicTaskMetrics      = "task.metrics"
+	TopicTaskTokens       = "task.tokens"
+	TopicTaskCompleted    = "task.completed"
+	TopicTaskFailed       = "task.failed"
+	TopicTaskRetrying     = "task.retrying"
 )
 
 // Delegation event topics.
@@ -50,11 +50,11 @@ type TaskStateChangedEvent struct {
 
 // TaskMetricsEvent is published when task metrics are recorded.
 type TaskMetricsEvent struct {
-	TaskID             string  // Task ID
-	InputTokens        int     // Input tokens used
-	OutputTokens       int     // Output tokens used
-	TotalTokens        int     // Total tokens used
-	EstimatedCostUSD   float64 // Estimated cost in USD
+	TaskID           string  // Task ID
+	InputTokens      int     // Input tokens used
+	OutputTokens     int     // Output tokens used
+	TotalTokens      int     // Total tokens used
+	EstimatedCostUSD float64 // Estimated cost in USD
 }
 
 // TaskTokensEvent is published when task token counts are updated.

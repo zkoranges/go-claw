@@ -70,6 +70,22 @@ var denyList = map[string]struct{}{
 	"su":       {},
 	"chmod":    {},
 	"chown":    {},
+	// Obfuscation tools
+	"base64":  {},
+	"openssl": {},
+	"xxd":     {},
+	// Interpreters (often used for bypass one-liners)
+	"python":  {},
+	"python3": {},
+	"perl":    {},
+	"ruby":    {},
+	"node":    {},
+	"go":      {},
+	"java":    {},
+	"php":     {},
+	"lua":     {},
+	"awk":     {},
+	"sed":     {},
 }
 
 // ShellInput is the input for the exec tool.

@@ -305,6 +305,9 @@ var (
 		regexp.MustCompile(`(?m)\bruby\s+-e\s`),
 		regexp.MustCompile(`(?m)\bperl\s+-e\s`),
 		regexp.MustCompile(`(?m)\bnode\s+-e\s`),
+		regexp.MustCompile(`(?m)\bgo\s+run\s`),
+		regexp.MustCompile(`(?m)\bphp\s+-r\s`),
+		regexp.MustCompile(`(?m)\blua\s+-e\s`),
 	}
 )
 

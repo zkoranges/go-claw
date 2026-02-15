@@ -75,11 +75,11 @@ type delegationStatus struct {
 }
 
 type planStepStatus struct {
-	ID        string
-	AgentID   string
-	Status    string
-	Duration  time.Duration
-	CostUSD   float64
+	ID       string
+	AgentID  string
+	Status   string
+	Duration time.Duration
+	CostUSD  float64
 }
 
 type activeDelegation struct {
@@ -129,8 +129,8 @@ type chatModel struct {
 	histSaved    string // current draft before entering history
 
 	// GC-SPEC-TUI-002: Operational status bar.
-	metrics    persistence.MetricsCounts
-	denyCount  int64
+	metrics   persistence.MetricsCounts
+	denyCount int64
 
 	// Plan execution tracking (GC-SPEC-PDR-v4-Phase-5).
 	plans   *planTracker

@@ -12,13 +12,13 @@ import (
 // Registry holds all Genkit tool definitions and the policy engine
 // used to enforce access control on external calls.
 type Registry struct {
-	Policy               policy.Checker
-	APIKeys              map[string]string
-	Tools                []ai.ToolRef
-	Providers            []SearchProvider   // Ordered by preference
-	ShellExecutor        Executor           // Optional override for shell execution
-	Store                *persistence.Store // Optional: enables spawn_task tool
-	DelegationMaxHops    int                // Max delegation chain depth (default 2)
+	Policy            policy.Checker
+	APIKeys           map[string]string
+	Tools             []ai.ToolRef
+	Providers         []SearchProvider   // Ordered by preference
+	ShellExecutor     Executor           // Optional override for shell execution
+	Store             *persistence.Store // Optional: enables spawn_task tool
+	DelegationMaxHops int                // Max delegation chain depth (default 2)
 }
 
 // NewRegistry builds a Registry with providers ordered by preference.

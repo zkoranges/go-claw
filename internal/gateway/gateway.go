@@ -96,7 +96,6 @@ type Server struct {
 
 	approvalsMu sync.Mutex
 	approvals   map[string]*approvalRequest
-
 }
 
 type client struct {

@@ -14,9 +14,9 @@ import (
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/basket/go-claw/internal/safety"
-	"github.com/basket/go-claw/internal/shared"
 	"github.com/basket/go-claw/internal/sandbox/legacy"
 	"github.com/basket/go-claw/internal/sandbox/wasm"
+	"github.com/basket/go-claw/internal/shared"
 	"github.com/basket/go-claw/internal/skills"
 	"github.com/basket/go-claw/internal/tokenutil"
 	"github.com/basket/go-claw/internal/tools"
@@ -1040,4 +1040,3 @@ func (b *GenkitBrain) respondWithRandomSkill(ctx context.Context) (string, bool)
 	// Safe fallback if module export signature doesn't match expected ABI.
 	return fmt.Sprintf("Random number: %d (via random skill fallback)", rand.Int31n(1000)), true
 }
-

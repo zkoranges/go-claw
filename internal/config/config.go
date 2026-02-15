@@ -340,7 +340,7 @@ func (c Config) Fingerprint() string {
 
 func defaultConfig() Config {
 	return Config{
-		WorkerCount:              4,
+		WorkerCount:              16,
 		TaskTimeoutSeconds:       int((10 * time.Minute).Seconds()),
 		BindAddr:                 "127.0.0.1:18789",
 		LogLevel:                 "info",

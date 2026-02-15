@@ -1661,9 +1661,9 @@ func (s *Store) CompleteTask(ctx context.Context, taskID, result string) error {
 		task, err := s.GetTask(ctx, taskID)
 		if err == nil && task != nil {
 			s.bus.Publish("task.completed", map[string]interface{}{
-				"task_id":   taskID,
+				"task_id":    taskID,
 				"session_id": task.SessionID,
-				"status":    TaskStatusSucceeded,
+				"status":     TaskStatusSucceeded,
 			})
 		}
 	}
@@ -1712,9 +1712,9 @@ func (s *Store) FailTask(ctx context.Context, taskID, errMsg string) error {
 		task, err := s.GetTask(ctx, taskID)
 		if err == nil && task != nil {
 			s.bus.Publish("task.failed", map[string]interface{}{
-				"task_id":   taskID,
+				"task_id":    taskID,
 				"session_id": task.SessionID,
-				"error":     errMsg,
+				"error":      errMsg,
 			})
 		}
 	}
@@ -2218,9 +2218,9 @@ func (s *Store) AbortTask(ctx context.Context, taskID string) (bool, error) {
 		task, err := s.GetTask(ctx, taskID)
 		if err == nil && task != nil {
 			s.bus.Publish("task.canceled", map[string]interface{}{
-				"task_id":   taskID,
+				"task_id":    taskID,
 				"session_id": task.SessionID,
-				"reason":    "abort_request",
+				"reason":     "abort_request",
 			})
 		}
 	}
@@ -3603,14 +3603,14 @@ func (s *Store) GetAllTaskContext(ctx context.Context, taskRootID string) (map[s
 
 // TeamPlan represents a multi-agent workflow plan (PDR Phase 4).
 type TeamPlan struct {
-	ID                 string    `json:"id"`
-	Name               string    `json:"name"`
-	Description        string    `json:"description"`
-	ExecutionStrategy  string    `json:"execution_strategy"` // sequential, parallel, round_robin
-	MaxRetries         int       `json:"max_retries"`
-	SessionID          string    `json:"session_id"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Description       string    `json:"description"`
+	ExecutionStrategy string    `json:"execution_strategy"` // sequential, parallel, round_robin
+	MaxRetries        int       `json:"max_retries"`
+	SessionID         string    `json:"session_id"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // TeamPlanStep represents a single step in a team plan.
@@ -3689,17 +3689,17 @@ func (s *Store) GetTeamPlanSteps(ctx context.Context, planID string) ([]*TeamPla
 
 // Experiment represents an A/B test or experiment (PDR Phase 5).
 type Experiment struct {
-	ID               string     `json:"id"`
-	Name             string     `json:"name"`
-	Description      string     `json:"description"`
-	Status           string     `json:"status"` // planning, running, completed, canceled
-	Hypothesis       string     `json:"hypothesis"`
-	ControlAgent     string     `json:"control_agent"`
-	TreatmentAgent   string     `json:"treatment_agent"`
-	SessionID        string     `json:"session_id"`
-	CreatedAt        time.Time  `json:"created_at"`
-	CompletedAt      *time.Time `json:"completed_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID             string     `json:"id"`
+	Name           string     `json:"name"`
+	Description    string     `json:"description"`
+	Status         string     `json:"status"` // planning, running, completed, canceled
+	Hypothesis     string     `json:"hypothesis"`
+	ControlAgent   string     `json:"control_agent"`
+	TreatmentAgent string     `json:"treatment_agent"`
+	SessionID      string     `json:"session_id"`
+	CreatedAt      time.Time  `json:"created_at"`
+	CompletedAt    *time.Time `json:"completed_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // ExperimentSample represents a single sample/trial in an experiment.
