@@ -26,9 +26,19 @@ Status: ✓ PASSED
   GATE 2: ✓ all checks passed (build + vet + test + race)
 
 PHASE 3: Event Publishing from State Changes
-Status: IN PROGRESS
-  Step 3.1: Implement event publishing in task completion paths
-  Step 3.2: Implement event publishing in task failure/retry paths
-  Step 3.3: Add integration tests for event publishing
+Status: ✓ PASSED
+  Step 3.1: Implemented event publishing in task completion paths
+  Step 3.2: Implemented event publishing in task failure/cancellation paths
+  Step 3.3: Added event payload types (TaskStateChangedEvent, TaskMetricsEvent, etc.)
+  Step 3.4: Updated CompleteTask, FailTask, AbortTask, UpdateTaskTokens, RecordTaskMetrics
+  GATE 3: ✓ all checks passed (build + vet + test + race)
 
-NEXT: Continue with Phase 3
+PHASE 4: Team Workflows / Plan Execution
+Status: IN PROGRESS
+  Step 4.1: Design team/plan schema and data structures
+  Step 4.2: Create Coordinator interface for sequential/parallel execution
+  Step 4.3: Implement team workflow execution engine
+  Step 4.4: Add TUI /teams command
+  Step 4.5: Integration tests
+
+NEXT: Implement Phase 4 schema and coordinator interface

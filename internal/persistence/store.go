@@ -55,8 +55,12 @@ const (
 	schemaVersionV9  = 9
 	schemaChecksumV9 = "gc-v9-2026-02-14-coordination-foundation"
 
-	schemaVersionLatest  = schemaVersionV9
-	schemaChecksumLatest = schemaChecksumV9
+	// v0.3 schema v10: adds team_plans and team_plan_steps for team workflows (PDR Phase 4).
+	schemaVersionV10  = 10
+	schemaChecksumV10 = "gc-v10-2026-02-15-team-workflows"
+
+	schemaVersionLatest  = schemaVersionV10
+	schemaChecksumLatest = schemaChecksumV10
 
 	defaultLeaseDuration = 30 * time.Second
 
@@ -384,6 +388,7 @@ func (s *Store) initSchema(ctx context.Context) error {
 		{schemaVersionV7, schemaChecksumV7},
 		{schemaVersionV8, schemaChecksumV8},
 		{schemaVersionV9, schemaChecksumV9},
+		{schemaVersionV10, schemaChecksumV10},
 	}
 	matched := false
 	for _, vc := range versionChecksums {
@@ -635,6 +640,39 @@ func (s *Store) initSchema(ctx context.Context) error {
 		_, _ = tx.ExecContext(ctx, stmt) // Idempotent: ignore "column already exists" errors
 	}
 
+	// v10: Team workflow plans and execution steps
+	v10Statements := []string{
+		`CREATE TABLE IF NOT EXISTS team_plans (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT,
+			execution_strategy TEXT NOT NULL CHECK(execution_strategy IN ('sequential', 'parallel', 'round_robin')),
+			max_retries INTEGER NOT NULL DEFAULT 3,
+			session_id TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(session_id) REFERENCES sessions(id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS team_plan_steps (
+			id TEXT PRIMARY KEY,
+			plan_id TEXT NOT NULL,
+			step_index INTEGER NOT NULL,
+			agent_id TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'succeeded', 'failed')) DEFAULT 'pending',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(plan_id) REFERENCES team_plans(id),
+			UNIQUE(plan_id, step_index)
+		);`,
+	}
+	for _, stmt := range v10Statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "already exists") {
+			// Create tables if they don't exist, ignore "table already exists" errors
+			_, _ = tx.ExecContext(ctx, stmt)
+		}
+	}
+
 	// Phase 3: Indexes (may reference columns added by backfills).
 	indexStatements := []string{
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`,
@@ -654,6 +692,10 @@ func (s *Store) initSchema(ctx context.Context) error {
 		// v9: Indexes for observability tables
 		`CREATE INDEX IF NOT EXISTS idx_metrics_agent_time ON task_metrics(agent_id, completed_at DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_activity_agent_time ON agent_activity_log(agent_id, created_at DESC);`,
+		// v10: Indexes for team plans
+		`CREATE INDEX IF NOT EXISTS idx_team_plans_session ON team_plans(session_id, created_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_team_plan_steps_plan ON team_plan_steps(plan_id, step_index);`,
+		`CREATE INDEX IF NOT EXISTS idx_team_plan_steps_status ON team_plan_steps(status, created_at DESC);`,
 	}
 
 	for _, stmt := range indexStatements {
@@ -3407,4 +3449,90 @@ func (s *Store) SetParentTask(ctx context.Context, childTaskID, parentTaskID str
 		return fmt.Errorf("set parent task: %w", err)
 	}
 	return nil
+}
+
+// TeamPlan represents a multi-agent workflow plan (PDR Phase 4).
+type TeamPlan struct {
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Description        string    `json:"description"`
+	ExecutionStrategy  string    `json:"execution_strategy"` // sequential, parallel, round_robin
+	MaxRetries         int       `json:"max_retries"`
+	SessionID          string    `json:"session_id"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// TeamPlanStep represents a single step in a team plan.
+type TeamPlanStep struct {
+	ID        string    `json:"id"`
+	PlanID    string    `json:"plan_id"`
+	StepIndex int       `json:"step_index"`
+	AgentID   string    `json:"agent_id"`
+	Prompt    string    `json:"prompt"`
+	Status    string    `json:"status"` // pending, running, succeeded, failed
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CreateTeamPlan creates a new team plan.
+func (s *Store) CreateTeamPlan(ctx context.Context, plan *TeamPlan) error {
+	plan.ID = uuid.NewString()
+	plan.CreatedAt = time.Now()
+	plan.UpdatedAt = plan.CreatedAt
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO team_plans (id, name, description, execution_strategy, max_retries, session_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		plan.ID, plan.Name, plan.Description, plan.ExecutionStrategy, plan.MaxRetries, plan.SessionID, plan.CreatedAt, plan.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("create team plan: %w", err)
+	}
+	return nil
+}
+
+// ListTeamPlansBySession lists all team plans for a session.
+func (s *Store) ListTeamPlansBySession(ctx context.Context, sessionID string) ([]*TeamPlan, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, description, execution_strategy, max_retries, session_id, created_at, updated_at
+		FROM team_plans
+		WHERE session_id = ?
+		ORDER BY created_at DESC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("query team plans: %w", err)
+	}
+	defer rows.Close()
+
+	var plans []*TeamPlan
+	for rows.Next() {
+		var p TeamPlan
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.ExecutionStrategy, &p.MaxRetries, &p.SessionID, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan team plan: %w", err)
+		}
+		plans = append(plans, &p)
+	}
+	return plans, rows.Err()
+}
+
+// GetTeamPlanSteps retrieves all steps for a team plan.
+func (s *Store) GetTeamPlanSteps(ctx context.Context, planID string) ([]*TeamPlanStep, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, plan_id, step_index, agent_id, prompt, status, created_at, updated_at
+		FROM team_plan_steps
+		WHERE plan_id = ?
+		ORDER BY step_index ASC`, planID)
+	if err != nil {
+		return nil, fmt.Errorf("query team plan steps: %w", err)
+	}
+	defer rows.Close()
+
+	var steps []*TeamPlanStep
+	for rows.Next() {
+		var s TeamPlanStep
+		if err := rows.Scan(&s.ID, &s.PlanID, &s.StepIndex, &s.AgentID, &s.Prompt, &s.Status, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan team plan step: %w", err)
+		}
+		steps = append(steps, &s)
+	}
+	return steps, rows.Err()
 }
