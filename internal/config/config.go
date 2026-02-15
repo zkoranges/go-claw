@@ -162,8 +162,24 @@ type Config struct {
 	Channels ChannelsConfig     `yaml:"channels"`
 	MCP      MCPConfig          `yaml:"mcp"`
 	Agents   []AgentConfigEntry `yaml:"agents"`
+	Plans    []PlanConfig       `yaml:"plans"` // GC-SPEC-PDR-v4-Phase-4: Plans for workflows
 
 	NeedsGenesis bool `yaml:"-"`
+}
+
+// PlanConfig defines a named workflow in config.yaml.
+// GC-SPEC-PDR-v4-Phase-4: Plan system configuration.
+type PlanConfig struct {
+	Name  string           `yaml:"name"`
+	Steps []PlanStepConfig `yaml:"steps"`
+}
+
+// PlanStepConfig defines a step within a plan.
+type PlanStepConfig struct {
+	ID        string   `yaml:"id"`
+	AgentID   string   `yaml:"agent_id"`
+	Prompt    string   `yaml:"prompt"`
+	DependsOn []string `yaml:"depends_on"`
 }
 
 // APIKey returns the value for the named API key, checking env overrides first.

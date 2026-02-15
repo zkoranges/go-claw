@@ -68,7 +68,29 @@
 - ✓ resolvePrompt at lines 92, 141-142 in executor.go
 - ✓ CreatePlanExecution/CompletePlanExecution calls at lines 48, 59, 70, 78 in executor.go
 
-## Phase 4-5: DEFERRED
-Partial implementation achieved. Would require:
-- Phase 4: Plan system from config.yaml (not started)
-- Phase 5: TUI visibility (not started)
+## Phase 4: Plan System (Partial)
+⏳ IN PROGRESS - Foundation Complete - Commit: (pending)
+
+**Completed Steps:**
+- Step 4.1: Added Plans to Config schema (PlanConfig, PlanStepConfig types)
+- Step 4.2: Created internal/coordinator/loader.go with LoadPlansFromConfig function
+- Step 4.3: Added comprehensive loader tests (4 test cases)
+
+**Completed Gate Items:**
+- ✓ Config schema updated with Plans field
+- ✓ Loader validates plans and agent references
+- ✓ Loader detects cycles via topoSort
+- ✓ All coordinator tests pass (15 tests)
+- ✓ All package tests pass (28 packages)
+
+**Remaining Steps:**
+- Step 4.4: Add /plan command to TUI (requires TUI architecture review)
+- Step 4.5: Add REST API /api/plans endpoints to gateway
+- Step 4.6: Wire executor and plans into main.go startup
+- Step 4.7: Test plan loading from config.yaml
+
+## Phase 5: TUI Visibility
+Not started. Would require:
+- Dashboard with agent/plan/task status widgets
+- Real-time task output streaming
+- Plan execution progress tracking
