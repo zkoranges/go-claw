@@ -481,6 +481,16 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 		slog.Warn("failed to load core memories", "agent_id", agentID, "error", err)
 	}
 
+	// Inject pinned files and text context
+	if pins, err := b.store.ListPins(ctx, agentID); err == nil && len(pins) > 0 {
+		pinMgr := memory.NewPinManager(b.store)
+		if formatted, _, err := pinMgr.FormatPins(ctx, agentID); err == nil && formatted != "" {
+			systemPrompt = systemPrompt + "\n\n" + formatted
+		}
+	} else if err != nil && agentID != shared.DefaultAgentID {
+		slog.Warn("failed to load pinned context", "agent_id", agentID, "error", err)
+	}
+
 	// Decay memories once per session start (factor 0.95 = 5% decay)
 	// Run async to not block response
 	go func() {

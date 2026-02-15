@@ -7,30 +7,18 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/basket/go-claw/internal/persistence"
 )
 
 // PinStore interface for persistence operations related to pins.
 type PinStore interface {
 	AddPin(ctx context.Context, agentID, pinType, source, content string, shared bool) error
 	UpdatePinContent(ctx context.Context, agentID, source, content, mtime string) error
-	ListPins(ctx context.Context, agentID string) ([]AgentPin, error)
-	GetPin(ctx context.Context, agentID, source string) (AgentPin, error)
+	ListPins(ctx context.Context, agentID string) ([]persistence.AgentPin, error)
+	GetPin(ctx context.Context, agentID, source string) (persistence.AgentPin, error)
 	RemovePin(ctx context.Context, agentID, source string) error
-	GetSharedPins(ctx context.Context, targetAgentID string) ([]AgentPin, error)
-}
-
-// AgentPin represents a pinned file or text snippet.
-type AgentPin struct {
-	ID        int64
-	AgentID   string
-	PinType   string // 'file', 'text'
-	Source    string // filepath, URL, or label
-	Content   string
-	TokenCount int
-	Shared    bool
-	LastRead  time.Time
-	FileMtime string
-	CreatedAt time.Time
+	GetSharedPins(ctx context.Context, targetAgentID string) ([]persistence.AgentPin, error)
 }
 
 // PinManager handles adding, formatting, and live-reloading pinned context.
@@ -155,8 +143,8 @@ func (pm *PinManager) FormatPins(ctx context.Context, agentID string) (string, i
 
 // RefreshFilePin re-reads a specific file pin if it has changed on disk.
 // Returns true if the file was updated, false if unchanged.
-func (pm *PinManager) RefreshFilePin(ctx context.Context, agentID, filepath string) (bool, error) {
-	pin, err := pm.store.GetPin(ctx, agentID, filepath)
+func (pm *PinManager) RefreshFilePin(ctx context.Context, agentID, filePath string) (bool, error) {
+	pin, err := pm.store.GetPin(ctx, agentID, filePath)
 	if err != nil {
 		return false, err
 	}
@@ -166,10 +154,10 @@ func (pm *PinManager) RefreshFilePin(ctx context.Context, agentID, filepath stri
 	}
 
 	// Check if file still exists and get current mtime
-	info, err := os.Stat(filepath)
+	info, err := os.Stat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, fmt.Errorf("file no longer exists: %s", filepath)
+			return false, fmt.Errorf("file no longer exists: %s", filePath)
 		}
 		return false, fmt.Errorf("cannot access file: %w", err)
 	}
@@ -182,13 +170,13 @@ func (pm *PinManager) RefreshFilePin(ctx context.Context, agentID, filepath stri
 	}
 
 	// File changed, re-read content
-	content, err := os.ReadFile(filepath)
+	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return false, fmt.Errorf("cannot read file: %w", err)
 	}
 
 	// Update in database
-	err = pm.store.UpdatePinContent(ctx, agentID, filepath, string(content), currentMtime)
+	err = pm.store.UpdatePinContent(ctx, agentID, filePath, string(content), currentMtime)
 	if err != nil {
 		return false, fmt.Errorf("failed to update pin: %w", err)
 	}

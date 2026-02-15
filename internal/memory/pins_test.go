@@ -5,24 +5,26 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/basket/go-claw/internal/persistence"
 )
 
 // mockPinStore is a test double for PinStore.
 type mockPinStore struct {
-	pins       map[string]map[string]AgentPin // [agentID][source]pin
+	pins       map[string]map[string]persistence.AgentPin // [agentID][source]pin
 	lastAction string
 	lastError  error
 }
 
 func (m *mockPinStore) AddPin(ctx context.Context, agentID, pinType, source, content string, shared bool) error {
 	if m.pins == nil {
-		m.pins = make(map[string]map[string]AgentPin)
+		m.pins = make(map[string]map[string]persistence.AgentPin)
 	}
 	if m.pins[agentID] == nil {
-		m.pins[agentID] = make(map[string]AgentPin)
+		m.pins[agentID] = make(map[string]persistence.AgentPin)
 	}
 	tokenCount := (len(content) + 3) / 4
-	m.pins[agentID][source] = AgentPin{
+	m.pins[agentID][source] = persistence.AgentPin{
 		ID:        int64(len(m.pins[agentID])) + 1,
 		AgentID:   agentID,
 		PinType:   pinType,
@@ -51,11 +53,11 @@ func (m *mockPinStore) UpdatePinContent(ctx context.Context, agentID, source, co
 	return m.lastError
 }
 
-func (m *mockPinStore) ListPins(ctx context.Context, agentID string) ([]AgentPin, error) {
+func (m *mockPinStore) ListPins(ctx context.Context, agentID string) ([]persistence.AgentPin, error) {
 	if m.pins == nil || m.pins[agentID] == nil {
-		return []AgentPin{}, nil
+		return []persistence.AgentPin{}, nil
 	}
-	var pins []AgentPin
+	var pins []persistence.AgentPin
 	for _, pin := range m.pins[agentID] {
 		pins = append(pins, pin)
 	}
@@ -63,13 +65,13 @@ func (m *mockPinStore) ListPins(ctx context.Context, agentID string) ([]AgentPin
 	return pins, m.lastError
 }
 
-func (m *mockPinStore) GetPin(ctx context.Context, agentID, source string) (AgentPin, error) {
+func (m *mockPinStore) GetPin(ctx context.Context, agentID, source string) (persistence.AgentPin, error) {
 	if m.pins == nil || m.pins[agentID] == nil {
-		return AgentPin{}, nil
+		return persistence.AgentPin{}, nil
 	}
 	pin, exists := m.pins[agentID][source]
 	if !exists {
-		return AgentPin{}, nil
+		return persistence.AgentPin{}, nil
 	}
 	m.lastAction = "GetPin"
 	return pin, m.lastError
@@ -84,9 +86,9 @@ func (m *mockPinStore) RemovePin(ctx context.Context, agentID, source string) er
 	return m.lastError
 }
 
-func (m *mockPinStore) GetSharedPins(ctx context.Context, targetAgentID string) ([]AgentPin, error) {
+func (m *mockPinStore) GetSharedPins(ctx context.Context, targetAgentID string) ([]persistence.AgentPin, error) {
 	m.lastAction = "GetSharedPins"
-	return []AgentPin{}, m.lastError
+	return []persistence.AgentPin{}, m.lastError
 }
 
 func TestPinManager_AddFilePin(t *testing.T) {
