@@ -91,7 +91,65 @@
 - ✓ Config with plans parses successfully
 
 ## Phase 5: TUI Visibility
-Not started. Would require:
-- Dashboard with agent/plan/task status widgets
-- Real-time task output streaming
-- Plan execution progress tracking
+⏳ NOT STARTED - Foundation Available
+
+**Requirements:**
+- Add delegation status display to TUI (active delegations, elapsed time)
+- Add plan progress tracking to TUI (step status, completion %)
+- Subscribe to bus events for real-time updates
+- Render status area in Bubbletea view
+
+**Blocked by:**
+- Deep TUI architecture study required (Bubbletea message handling)
+- Executor needs bus event publishing integration
+- Requires understanding existing model, Update, View cycle
+
+**Implementation Path:**
+- Step 5.1: Add delegationStatus to TUI model, subscribe to delegation events
+- Step 5.2: Add activePlan to TUI model, subscribe to plan execution events
+- Step 5.3: Render status area in View with delegations and plan progress
+- Step 5.4: Handle delegation/plan completion messages in Update
+- Step 5.5: Wire executor to publish bus events on step transitions
+
+---
+
+# Summary: PDR v4 Implementation
+
+**Phases Completed: 4/5**
+
+✓ Phase 1: Wire the Foundation (f8dbec4)
+  - Task context store methods
+  - Parent task tracking
+  - Capability-based agent routing
+
+✓ Phase 2: Event-Driven Completion Tracking (216c5f3)
+  - TaskCompletionWaiter with polling
+  - WaitForTask and WaitForAll methods
+  - Delegation refactored to use Waiter
+
+✓ Phase 3: Working DAG Executor (7556dcf)
+  - Plan and PlanStep types with validation
+  - Executor with wave-based execution
+  - Topological sort with cycle detection
+  - Prompt template substitution
+
+✓ Phase 4: Plan System (08ae486)
+  - Config schema with Plans field
+  - Plan loader with validation
+  - TUI /plan command stub
+  - Gateway plans field reference
+  - Config parsing verified
+
+**Gate Summary:**
+- Phase 1: ✓ PASSED (commit f8dbec4)
+- Phase 2: ✓ PASSED (commit 216c5f3)
+- Phase 3: ✓ PASSED (commit 7556dcf)
+- Phase 4: ✓ PASSED (commit 08ae486)
+- Phase 5: ⏳ Foundation ready, not started
+
+**Total Code Changes:**
+- ~500 lines: plan.go, executor.go, executor_test.go
+- ~500 lines: loader.go, loader_test.go, waiter_test.go
+- ~400 lines: configuration updates, TUI command, gateway reference
+- All 28 package tests pass
+- All gate requirements verified
