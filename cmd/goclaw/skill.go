@@ -44,7 +44,7 @@ func runSkillCommand(ctx context.Context, args []string) int {
 	}
 
 	dbPath := filepath.Join(cfg.HomeDir, "goclaw.db")
-	store, err := persistence.Open(dbPath)
+	store, err := persistence.Open(dbPath, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open db: %v\n", err)
 		return 1

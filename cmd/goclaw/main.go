@@ -138,8 +138,11 @@ func main() {
 		}
 	}
 
+	// Create event bus early so it can be passed to the store.
+	eventBus := bus.New()
+
 	dbPath := filepath.Join(cfg.HomeDir, "goclaw.db")
-	store, err := persistence.Open(dbPath)
+	store, err := persistence.Open(dbPath, eventBus)
 	if err != nil {
 		fatalStartup(logger, "E_STORE_OPEN", err)
 	}
@@ -222,9 +225,6 @@ The system runs this checklist periodically to ensure health.
 	}
 
 	llmProvider, llmModel, llmAPIKey := cfg.ResolveLLMConfig()
-
-	// Create event bus early so it can be passed to the registry.
-	eventBus := bus.New()
 
 	// Create AgentRegistry (replaces single brain+engine).
 	registry := agent.NewRegistry(store, eventBus, pol, wasmHost, cfg.APIKeys)

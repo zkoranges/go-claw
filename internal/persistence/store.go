@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/basket/go-claw/internal/audit"
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/shared"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
@@ -209,7 +210,8 @@ type TaskEvent struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db  *sql.DB
+	bus *bus.Bus // may be nil in tests
 }
 
 func DefaultDBPath() string {
@@ -220,7 +222,7 @@ func DefaultDBPath() string {
 	return filepath.Join(home, ".goclaw", "goclaw.db")
 }
 
-func Open(path string) (*Store, error) {
+func Open(path string, eventBus *bus.Bus) (*Store, error) {
 	if path == "" {
 		path = DefaultDBPath()
 	}
@@ -236,7 +238,7 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	store := &Store{db: db}
+	store := &Store{db: db, bus: eventBus}
 	if err := store.configurePragmas(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err

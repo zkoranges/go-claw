@@ -81,7 +81,7 @@ func checkDatabase(ctx context.Context, cfg *config.Config) CheckResult {
 	// main.go uses filepath.Join(cfg.HomeDir, "goclaw.db")
 	realDBPath := fmt.Sprintf("%s/goclaw.db", cfg.HomeDir)
 
-	store, err := persistence.Open(realDBPath)
+	store, err := persistence.Open(realDBPath, nil)
 	if err != nil {
 		return CheckResult{Name: "Database", Status: "FAIL", Message: fmt.Sprintf("Connection failed: %v", err)}
 	}

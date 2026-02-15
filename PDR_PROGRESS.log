@@ -18,3 +18,13 @@ PHASE 1: ✓ PASSED
 
 PHASE 2: Event Infrastructure
 Status: NOT STARTED
+
+PHASE 2: Event Infrastructure
+Status: IN PROGRESS (Core changes done, test file fixes needed)
+  Step 2.1: Identified bus and store wiring points
+  Step 2.2: Added bus field to Store struct
+  Step 2.3: Updated Store.Open() to accept eventBus parameter
+  Step 2.4: PARTIAL - Updated main.go, skill.go, doctor.go. Test files need manual fixes.
+  Note: Test file persistence.Open calls need ", nil" added (complex due to multi-line patterns)
+
+NEXT: Complete Phase 2 test file fixes, then continue with Phase 3-5
