@@ -1,0 +1,4 @@
+[0;36m[PDR][0m Gate 1: @Mentions...
+[0;31m[FAIL][0m Mention tests: 2 (need ≥10)
+ok  	github.com/basket/go-claw/internal/tui	0.276s
+[0;31m[FAIL][0m Gate 1: 1 failures

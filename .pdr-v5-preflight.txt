@@ -1,2 +1,1053 @@
-=== PRE-FLIGHT OUTPUT — Sun Feb 15 20:30:56 WET 2026 ===
+=== PRE-FLIGHT OUTPUT — Sun Feb 15 20:34:27 WET 2026 ===
 
+=== TUI Model Struct ===
+internal/tui/tui.go-type StatusProvider func() Snapshot
+internal/tui/tui.go-
+internal/tui/tui.go:type model struct {
+internal/tui/tui.go-	provider StatusProvider
+internal/tui/tui.go-	snap     Snapshot
+internal/tui/tui.go-}
+internal/tui/tui.go-
+internal/tui/tui.go-type tickMsg time.Time
+internal/tui/tui.go-
+internal/tui/tui.go-func tickCmd() tea.Cmd {
+internal/tui/tui.go-	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+internal/tui/tui.go-}
+internal/tui/tui.go-
+internal/tui/tui.go-func (m model) Init() tea.Cmd {
+internal/tui/tui.go-	return tickCmd()
+internal/tui/tui.go-}
+internal/tui/tui.go-
+internal/tui/tui.go-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+internal/tui/tui.go-	switch msg := msg.(type) {
+internal/tui/tui.go-	case tea.KeyMsg:
+internal/tui/tui.go-		switch msg.String() {
+internal/tui/tui.go-		case "q", "ctrl+c":
+internal/tui/tui.go-			return m, tea.Quit
+internal/tui/tui.go-		}
+internal/tui/tui.go-	case tickMsg:
+internal/tui/tui.go-		m.snap = m.provider()
+internal/tui/tui.go-		return m, tickCmd()
+internal/tui/tui.go-	}
+internal/tui/tui.go-	return m, nil
+internal/tui/tui.go-}
+internal/tui/tui.go-
+internal/tui/tui.go-func (m model) View() string {
+internal/tui/tui.go-	lastErr := m.snap.LastError
+
+=== TUI Update Function ===
+internal/tui/agent_selector.go-}
+internal/tui/agent_selector.go-
+internal/tui/agent_selector.go:func (m agentSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+internal/tui/agent_selector.go-	switch msg := msg.(type) {
+internal/tui/agent_selector.go-	case tea.KeyMsg:
+internal/tui/agent_selector.go-		switch msg.String() {
+internal/tui/agent_selector.go-		case "ctrl+c", "esc":
+internal/tui/agent_selector.go-			m.quit = true
+internal/tui/agent_selector.go-			return m, nil
+internal/tui/agent_selector.go-		case "enter", "ctrl+m", "ctrl+j":
+internal/tui/agent_selector.go-			if len(m.agents) > 0 {
+internal/tui/agent_selector.go-				m.selectedID = m.agents[m.cursor].ID
+internal/tui/agent_selector.go-				m.done = true
+internal/tui/agent_selector.go-			}
+internal/tui/agent_selector.go-			return m, nil
+internal/tui/agent_selector.go-		case "up", "k":
+internal/tui/agent_selector.go-			if m.cursor > 0 {
+internal/tui/agent_selector.go-				m.cursor--
+internal/tui/agent_selector.go-			}
+internal/tui/agent_selector.go-		case "down", "j":
+internal/tui/agent_selector.go-			if m.cursor < len(m.agents)-1 {
+internal/tui/agent_selector.go-				m.cursor++
+internal/tui/agent_selector.go-			}
+internal/tui/agent_selector.go-		}
+internal/tui/agent_selector.go-	}
+internal/tui/agent_selector.go-	return m, nil
+internal/tui/agent_selector.go-}
+internal/tui/agent_selector.go-
+internal/tui/agent_selector.go-func (m agentSelectorModel) View() string {
+internal/tui/agent_selector.go-	if m.quit || m.done {
+internal/tui/agent_selector.go-		return ""
+internal/tui/agent_selector.go-	}
+internal/tui/agent_selector.go-
+--
+internal/tui/chat_tui.go-}
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go:func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+internal/tui/chat_tui.go-	switch msg := msg.(type) {
+internal/tui/chat_tui.go-	case ctxDoneMsg:
+internal/tui/chat_tui.go-		return m, tea.Quit
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go-	case planEventMsg:
+internal/tui/chat_tui.go-		m.plans.handleEvent(msg.event)
+internal/tui/chat_tui.go-		var cmd tea.Cmd
+internal/tui/chat_tui.go-		if m.planSub != nil {
+internal/tui/chat_tui.go-			cmd = waitForPlanEvent(m.planSub)
+internal/tui/chat_tui.go-		}
+internal/tui/chat_tui.go-		return m, cmd
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go-	case statusTickMsg:
+internal/tui/chat_tui.go-		// GC-SPEC-TUI-002: Refresh operational metrics for the status bar.
+internal/tui/chat_tui.go-		if m.cc.Store != nil {
+internal/tui/chat_tui.go-			if mc, err := m.cc.Store.MetricsCounts(m.ctx); err == nil {
+internal/tui/chat_tui.go-				m.metrics = mc
+internal/tui/chat_tui.go-			}
+internal/tui/chat_tui.go-		}
+internal/tui/chat_tui.go-		m.denyCount = audit.DenyCount()
+internal/tui/chat_tui.go-		m.plans.cleanup()
+internal/tui/chat_tui.go-		return m, statusTickCmd()
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go-	case tea.KeyMsg:
+internal/tui/chat_tui.go-		if m.mode == chatModeModelSelector {
+internal/tui/chat_tui.go-			updated, cmd := m.selector.Update(msg)
+internal/tui/chat_tui.go-			sm, ok := updated.(selectorModel)
+internal/tui/chat_tui.go-			if ok {
+internal/tui/chat_tui.go-				m.selector = sm
+internal/tui/chat_tui.go-			}
+--
+internal/tui/genesis_flow_test.go-// --- test helpers ---
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go:func mustUpdate(t *testing.T, m genesisModel, msg tea.Msg) genesisModel {
+internal/tui/genesis_flow_test.go-	t.Helper()
+internal/tui/genesis_flow_test.go-	result, _ := m.Update(msg)
+internal/tui/genesis_flow_test.go-	gm, ok := result.(genesisModel)
+internal/tui/genesis_flow_test.go-	if !ok {
+internal/tui/genesis_flow_test.go-		t.Fatalf("Update returned non-genesisModel: %T", result)
+internal/tui/genesis_flow_test.go-	}
+internal/tui/genesis_flow_test.go-	return gm
+internal/tui/genesis_flow_test.go-}
+internal/tui/genesis_flow_test.go-
+
+=== TUI View Function ===
+internal/tui/agent_selector.go-}
+internal/tui/agent_selector.go-
+internal/tui/agent_selector.go:func (m agentSelectorModel) View() string {
+internal/tui/agent_selector.go-	if m.quit || m.done {
+internal/tui/agent_selector.go-		return ""
+internal/tui/agent_selector.go-	}
+internal/tui/agent_selector.go-
+internal/tui/agent_selector.go-	var b strings.Builder
+internal/tui/agent_selector.go-	b.WriteString("\n  Select an agent:\n\n")
+internal/tui/agent_selector.go-	b.WriteString(fmt.Sprintf("  %-2s %-2s %-16s %-20s %s\n", "", "", "ID", "Name", "Model"))
+internal/tui/agent_selector.go-	b.WriteString(fmt.Sprintf("  %-2s %-2s %-16s %-20s %s\n", "", "", strings.Repeat("-", 16), strings.Repeat("-", 20), strings.Repeat("-", 20)))
+internal/tui/agent_selector.go-
+internal/tui/agent_selector.go-	for i, info := range m.agents {
+internal/tui/agent_selector.go-		cursor := " "
+internal/tui/agent_selector.go-		if i == m.cursor {
+internal/tui/agent_selector.go-			cursor = ">"
+internal/tui/agent_selector.go-		}
+internal/tui/agent_selector.go-		marker := " "
+--
+internal/tui/chat_tui.go-}
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go:func (m chatModel) View() string {
+internal/tui/chat_tui.go-	var b strings.Builder
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go-	b.WriteString(fmt.Sprintf("%s — %s\n", m.agentPrefix, m.modelName))
+internal/tui/chat_tui.go-	b.WriteString("Type a message. /help for commands, Ctrl+D or /quit to exit.\n")
+internal/tui/chat_tui.go-	b.WriteString("\n")
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go-	if m.mode == chatModeModelSelector {
+internal/tui/chat_tui.go-		// Selector view already includes its own help footer.
+internal/tui/chat_tui.go-		b.WriteString(m.selector.View())
+internal/tui/chat_tui.go-		return b.String()
+internal/tui/chat_tui.go-	}
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go-	if m.mode == chatModeAgentSelector {
+internal/tui/chat_tui.go-		b.WriteString(m.agentSelector.View())
+internal/tui/chat_tui.go-		return b.String()
+--
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go-// renderPlanView renders the plan execution view.
+
+=== Input Handler ===
+internal/tui/chat_tui_test.go-	// Type "/plans" into input.
+internal/tui/chat_tui_test.go-	m.input = []rune("/plans")
+internal/tui/chat_tui_test.go-	m.cursor = 6
+internal/tui/chat_tui_test.go-
+internal/tui/chat_tui_test.go-	// Send Enter to submit.
+internal/tui/chat_tui_test.go:	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+internal/tui/chat_tui_test.go-	um := updated.(chatModel)
+internal/tui/chat_tui_test.go-
+internal/tui/chat_tui_test.go-	if um.mode != chatModePlanView {
+internal/tui/chat_tui_test.go-		t.Errorf("expected chatModePlanView, got %d", um.mode)
+internal/tui/chat_tui_test.go-	}
+internal/tui/chat_tui_test.go-}
+internal/tui/chat_tui_test.go-
+internal/tui/chat_tui_test.go-func TestPlanView_AnyKeyExits(t *testing.T) {
+internal/tui/chat_tui_test.go-	m := newChatModel(context.Background(), ChatConfig{}, "sess", "test", "model")
+internal/tui/chat_tui_test.go-	m.mode = chatModePlanView
+internal/tui/chat_tui_test.go-
+internal/tui/chat_tui_test.go-	// Press any key (e.g. 'q')
+internal/tui/chat_tui_test.go-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+internal/tui/chat_tui_test.go-	um := updated.(chatModel)
+internal/tui/chat_tui_test.go-
+internal/tui/chat_tui_test.go-	if um.mode != chatModeChat {
+internal/tui/chat_tui_test.go-		t.Errorf("expected chatModeChat after key press in plan view, got %d", um.mode)
+internal/tui/chat_tui_test.go-	}
+internal/tui/chat_tui_test.go-}
+internal/tui/chat_tui_test.go-
+internal/tui/chat_tui_test.go-func TestPlanView_ViewRendersInPlanMode(t *testing.T) {
+internal/tui/chat_tui_test.go-	m := newChatModel(context.Background(), ChatConfig{}, "sess", "test", "model")
+internal/tui/chat_tui_test.go-	m.mode = chatModePlanView
+internal/tui/chat_tui_test.go-
+internal/tui/chat_tui_test.go-	view := m.View()
+internal/tui/chat_tui_test.go-	if !strings.Contains(view, "Plan Executions") {
+internal/tui/chat_tui_test.go-		t.Errorf("expected plan view in View() output, got: %q", view)
+internal/tui/chat_tui_test.go-	}
+internal/tui/chat_tui_test.go-}
+--
+internal/tui/genesis_flow_test.go-	m := newGenesisModel()
+internal/tui/genesis_flow_test.go-	m.input = "Orion"
+internal/tui/genesis_flow_test.go-	m.inputPos = runeLen("Orion")
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go-	// Step 1: Name -> Role (emoji step removed)
+internal/tui/genesis_flow_test.go:	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+internal/tui/genesis_flow_test.go-	assertStep(t, m, stepRole, "expected stepRole after name")
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go-	if m.agentName != "Orion" {
+internal/tui/genesis_flow_test.go-		t.Fatalf("expected agentName=Orion, got %q", m.agentName)
+internal/tui/genesis_flow_test.go-	}
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go-	// Step 2: Role -> Personality (select "Research Analyst", index 1)
+internal/tui/genesis_flow_test.go-	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyDown}) // cursor 0 -> 1
+internal/tui/genesis_flow_test.go:	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+internal/tui/genesis_flow_test.go-	assertStep(t, m, stepPersonality, "expected stepPersonality after role")
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go-	if m.role != roleOptions[1].value {
+internal/tui/genesis_flow_test.go-		t.Fatalf("expected role=%q, got %q", roleOptions[1].value, m.role)
+internal/tui/genesis_flow_test.go-	}
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go-	// Step 3: Personality -> Provider (select "Technical & Concise", index 2)
+internal/tui/genesis_flow_test.go-	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyDown}) // 0 -> 1
+internal/tui/genesis_flow_test.go-	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyDown}) // 1 -> 2
+internal/tui/genesis_flow_test.go:	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+internal/tui/genesis_flow_test.go-	assertStep(t, m, stepProvider, "expected stepProvider after personality")
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go-	if m.personality != personalityOptions[2].value {
+internal/tui/genesis_flow_test.go-		t.Fatalf("expected personality=%q, got %q", personalityOptions[2].value, m.personality)
+internal/tui/genesis_flow_test.go-	}
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go-	// Step 4a: Provider -> Model (select Anthropic, index 1)
+internal/tui/genesis_flow_test.go-	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyDown}) // 0 -> 1
+internal/tui/genesis_flow_test.go:	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+internal/tui/genesis_flow_test.go-	assertStep(t, m, stepModel, "expected stepModel after provider")
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go-	if m.provider != "anthropic" {
+internal/tui/genesis_flow_test.go-		t.Fatalf("expected provider=anthropic, got %q", m.provider)
+internal/tui/genesis_flow_test.go-	}
+internal/tui/genesis_flow_test.go-	if len(m.models) == 0 {
+internal/tui/genesis_flow_test.go-		t.Fatal("expected non-empty models list for anthropic")
+internal/tui/genesis_flow_test.go-	}
+internal/tui/genesis_flow_test.go-
+internal/tui/genesis_flow_test.go-	// Step 4b: Model -> API Key (select first model)
+(not found)
+
+=== Command Dispatch ===
+internal/tui/chat_tui_test.go-func TestHandleCommand_HelpWritesOutput(t *testing.T) {
+internal/tui/chat_tui_test.go-	var buf bytes.Buffer
+internal/tui/chat_tui_test.go-	cc := ChatConfig{}
+internal/tui/chat_tui_test.go:	shouldExit := handleCommand("/help", &cc, "sess", &buf)
+internal/tui/chat_tui_test.go-	if shouldExit {
+internal/tui/chat_tui_test.go-		t.Fatalf("expected shouldExit=false")
+internal/tui/chat_tui_test.go-	}
+internal/tui/chat_tui_test.go-	if !strings.Contains(buf.String(), "Commands:") {
+internal/tui/chat_tui_test.go-		t.Fatalf("expected help output, got: %q", buf.String())
+internal/tui/chat_tui_test.go-	}
+internal/tui/chat_tui_test.go-	if !strings.Contains(buf.String(), "/plans") {
+internal/tui/chat_tui_test.go-		t.Fatalf("expected /plans in help output, got: %q", buf.String())
+internal/tui/chat_tui_test.go-	}
+internal/tui/chat_tui_test.go-}
+internal/tui/chat_tui_test.go-
+internal/tui/chat_tui_test.go-func TestPlanTracker_HandleEvent(t *testing.T) {
+internal/tui/chat_tui_test.go-	pt := &planTracker{executions: make(map[string]*PlanExecutionState)}
+internal/tui/chat_tui_test.go-
+internal/tui/chat_tui_test.go-	// Simulate plan.execution.started event.
+internal/tui/chat_tui_test.go-	pt.handleEvent(bus.Event{
+internal/tui/chat_tui_test.go-		Topic: bus.TopicPlanExecutionStarted,
+internal/tui/chat_tui_test.go-		Payload: map[string]interface{}{
+internal/tui/chat_tui_test.go-			"execution_id": "exec-1",
+internal/tui/chat_tui_test.go-			"plan_name":    "deploy",
+--
+internal/tui/chat_tui.go-				}
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go-				var buf bytes.Buffer
+internal/tui/chat_tui.go:				shouldExit := handleCommand(line, &m.cc, m.sessionID, &buf)
+internal/tui/chat_tui.go-				out := strings.TrimSpace(buf.String())
+internal/tui/chat_tui.go-				if out != "" {
+internal/tui/chat_tui.go-					m.history = append(m.history, chatEntry{role: chatRoleSystem, text: out})
+internal/tui/chat_tui.go-				}
+internal/tui/chat_tui.go-				if shouldExit {
+internal/tui/chat_tui.go-					return m, tea.Quit
+internal/tui/chat_tui.go-				}
+internal/tui/chat_tui.go-				// Update agentPrefix if agent was switched via /agent command.
+internal/tui/chat_tui.go-				if m.cc.AgentName != "" && m.cc.AgentEmoji != "" {
+internal/tui/chat_tui.go-					m.agentPrefix = fmt.Sprintf("%s %s", m.cc.AgentEmoji, m.cc.AgentName)
+internal/tui/chat_tui.go-				} else if m.cc.AgentName != "" {
+internal/tui/chat_tui.go-					m.agentPrefix = m.cc.AgentName
+internal/tui/chat_tui.go-				}
+internal/tui/chat_tui.go-				return m, nil
+internal/tui/chat_tui.go-			}
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go-			// User message.
+internal/tui/chat_tui.go-			m.history = append(m.history, chatEntry{role: chatRoleUser, text: line})
+internal/tui/chat_tui.go-			if m.cc.Store != nil {
+internal/tui/chat_tui.go-				_ = m.cc.Store.AddHistory(m.ctx, m.sessionID, m.cc.CurrentAgent, "user", line, tokenutil.EstimateTokens(line))
+--
+internal/tui/chat.go-	return runChatTUI(ctx, m, cc.CancelFunc)
+internal/tui/chat.go-}
+internal/tui/chat.go-
+internal/tui/chat.go:// handleCommand processes a slash command. Returns true if the chat should exit.
+internal/tui/chat.go:func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer) bool {
+internal/tui/chat.go-	parts := strings.SplitN(line, " ", 2)
+internal/tui/chat.go-	cmd := strings.ToLower(parts[0])
+internal/tui/chat.go-	// Common typo/alias.
+internal/tui/chat.go-	if cmd == "/domain" {
+internal/tui/chat.go-		cmd = "/domains"
+internal/tui/chat.go-	}
+internal/tui/chat.go-	arg := ""
+internal/tui/chat.go-	if len(parts) > 1 {
+internal/tui/chat.go-		arg = strings.TrimSpace(parts[1])
+internal/tui/chat.go-	}
+internal/tui/chat.go-
+internal/tui/chat.go-	switch cmd {
+internal/tui/chat.go-	case "/quit", "/exit":
+internal/tui/chat.go-		return true
+internal/tui/chat.go-
+internal/tui/chat.go-	case "/help":
+internal/tui/chat.go-		fmt.Fprintln(out)
+internal/tui/chat.go-		fmt.Fprintln(out, "  Commands:")
+internal/tui/chat.go-		fmt.Fprintln(out, "    /help                        Show this help message")
+internal/tui/chat.go-		fmt.Fprintln(out, "    /agents                      Interactive agent selector")
+
+=== TUI Files ===
+-rw-r--r--@ 1 basket  staff   2015 Feb 14 23:56 internal/tui/agent_selector.go
+-rw-r--r--@ 1 basket  staff   5466 Feb 15 18:56 internal/tui/chat_tui_test.go
+-rw-r--r--@ 1 basket  staff  22090 Feb 15 20:25 internal/tui/chat_tui.go
+-rw-r--r--@ 1 basket  staff  25606 Feb 15 18:28 internal/tui/chat.go
+-rw-r--r--@ 1 basket  staff  10724 Feb 14 23:58 internal/tui/genesis_flow_test.go
+-rw-r--r--@ 1 basket  staff  15821 Feb 14 23:58 internal/tui/genesis_test.go
+-rw-r--r--@ 1 basket  staff  21244 Feb 14 23:56 internal/tui/genesis.go
+-rw-r--r--@ 1 basket  staff   7116 Feb 14 23:56 internal/tui/model_selector.go
+-rw-r--r--@ 1 basket  staff    456 Feb 14 23:56 internal/tui/tty_reset_unix.go
+-rw-r--r--@ 1 basket  staff   2509 Feb 14 23:58 internal/tui/tui_test.go
+-rw-r--r--@ 1 basket  staff   2351 Feb 14 23:56 internal/tui/tui.go
+
+=== TUI Constructor ===
+(not found)
+
+=== TUI Interfaces ===
+internal/tui/chat.go-// AgentSwitcher allows the TUI to list and switch between agents.
+internal/tui/chat.go-// Implemented in main.go to avoid importing the agent package here.
+internal/tui/chat.go:type AgentSwitcher interface {
+internal/tui/chat.go-	SwitchAgent(agentID string) (brain engine.Brain, name, emoji string, err error)
+internal/tui/chat.go-	ListAgentIDs() []string
+internal/tui/chat.go-	ListAgentInfo() []AgentInfo
+internal/tui/chat.go-	CreateAgent(ctx context.Context, id, name, provider, model, soul string) error
+internal/tui/chat.go-	RemoveAgent(ctx context.Context, id string) error
+internal/tui/chat.go-}
+internal/tui/chat.go-
+internal/tui/chat.go-// ChatConfig holds the dependencies for the chat REPL.
+internal/tui/chat.go-type ChatConfig struct {
+internal/tui/chat.go-	Brain        engine.Brain
+
+=== Existing Modals ===
+internal/tui/chat.go:19:// AgentInfo holds display information about an agent.
+internal/tui/chat.go:566:	"researcher": "You are a research specialist. Find information, analyze data, and provide thorough research summaries. Be methodical and cite your sources.",
+internal/tui/chat.go:570:	"reviewer":   "You are a code reviewer. Examine code for bugs, security issues, performance problems, and style. Provide specific, actionable feedback.",
+internal/tui/chat.go:575:	"designer":   "You are a design specialist. Focus on user experience, interface design, information architecture, and visual clarity.",
+internal/tui/chat.go:768:		// Support provider/model format.
+internal/tui/model_selector.go:43:		{"claude-sonnet-4-5-20250929", "Balanced performance"},
+internal/tui/model_selector.go:49:		{"gpt-4o", "Versatile, multimodal"},
+
+=== Bubbletea Components ===
+internal/tui/chat_tui.go:43:type spinnerTickMsg struct{}
+internal/tui/chat_tui.go:117:	spinnerIdx int
+internal/tui/chat_tui.go:469:					// treat as non-insertable; handled above in the "enter/ctrl+m/ctrl+j" cases
+internal/tui/chat_tui.go:503:	case spinnerTickMsg:
+internal/tui/chat_tui.go:505:			m.spinnerIdx++
+internal/tui/chat_tui.go:566:	available := m.height - 6 // header + instructions + blank + input + spinner + status bar
+internal/tui/chat_tui.go:584:		spin := []string{"|", "/", "-", "\\"}[m.spinnerIdx%4]
+internal/tui/chat_tui.go:750:		return spinnerTickMsg{}
+internal/tui/chat.go:27:// AgentSwitcher allows the TUI to list and switch between agents.
+internal/tui/chat.go:103:		fmt.Fprintln(out, "    /agents list                 List agents (current marked with *)")
+internal/tui/chat.go:111:		fmt.Fprintln(out, "    /config list                 Show configured API keys (values masked)")
+internal/tui/chat.go:114:		fmt.Fprintln(out, "    /model list                  List all providers and models")
+internal/tui/chat.go:444:	case "", "list":
+internal/tui/chat.go:566:	"researcher": "You are a research specialist. Find information, analyze data, and provide thorough research summaries. Be methodical and cite your sources.",
+internal/tui/chat.go:567:	"writer":     "You are a writing specialist. Draft, edit, and polish text. Excel at clear communication, storytelling, and adapting tone for different audiences.",
+internal/tui/chat.go:569:	"coder":      "You are a coding specialist. Write clean, efficient code. Debug issues, suggest optimizations, and follow best practices for the relevant language.",
+internal/tui/chat.go:571:	"tester":     "You are a testing specialist. Design test cases, identify edge cases, write test plans, and verify that implementations meet requirements.",
+internal/tui/chat.go:575:	"designer":   "You are a design specialist. Focus on user experience, interface design, information architecture, and visual clarity.",
+internal/tui/chat.go:583:	return fmt.Sprintf("You are a %s specialist. Focus on %s-related tasks and provide expert guidance in your area.", role, role)
+internal/tui/chat.go:693:	case "list":
+
+=== Key Bindings ===
+internal/tui/agent_selector.go:36:		case "ctrl+c", "esc":
+internal/tui/agent_selector.go:39:		case "enter", "ctrl+m", "ctrl+j":
+internal/tui/chat_tui.go:297:			case "ctrl+c", "ctrl+d":
+internal/tui/chat_tui.go:307:		case "ctrl+c", "ctrl+d":
+internal/tui/chat_tui.go:310:		case "enter", "ctrl+m", "ctrl+j":
+internal/tui/chat_tui.go:392:		case "up", "ctrl+p":
+internal/tui/chat_tui.go:395:		case "down", "ctrl+n":
+internal/tui/chat_tui.go:430:		// Terminal mappings vary; Cmd+Backspace is commonly configured as ctrl+u (kill line) or ctrl+w (backward-kill-word).
+internal/tui/chat_tui.go:431:		case "ctrl+a":
+internal/tui/chat_tui.go:434:		case "ctrl+e":
+internal/tui/chat_tui.go:437:		case "ctrl+b":
+internal/tui/chat_tui.go:442:		case "ctrl+f":
+internal/tui/chat_tui.go:447:		case "ctrl+k":
+internal/tui/chat_tui.go:452:		case "ctrl+u":
+internal/tui/chat_tui.go:456:		case "ctrl+w", "alt+backspace":
+internal/tui/chat_tui.go:469:					// treat as non-insertable; handled above in the "enter/ctrl+m/ctrl+j" cases
+internal/tui/chat.go:55:// It blocks until the user types /quit, presses ctrl+d, or quits via the UI.
+internal/tui/genesis_flow_test.go:264:		result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+internal/tui/genesis.go:142:		if key == "ctrl+c" {
+internal/tui/genesis.go:167:	case "enter", "ctrl+m", "ctrl+j":
+
+=== Init Function ===
+internal/tui/agent_selector.go-		agents:  agents,
+internal/tui/agent_selector.go-		current: currentID,
+internal/tui/agent_selector.go-	}
+internal/tui/agent_selector.go-}
+internal/tui/agent_selector.go-
+internal/tui/agent_selector.go:func (m agentSelectorModel) Init() tea.Cmd {
+internal/tui/agent_selector.go-	return nil
+internal/tui/agent_selector.go-}
+internal/tui/agent_selector.go-
+internal/tui/agent_selector.go-func (m agentSelectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+internal/tui/agent_selector.go-	switch msg := msg.(type) {
+internal/tui/agent_selector.go-	case tea.KeyMsg:
+internal/tui/agent_selector.go-		switch msg.String() {
+internal/tui/agent_selector.go-		case "ctrl+c", "esc":
+internal/tui/agent_selector.go-			m.quit = true
+internal/tui/agent_selector.go-			return m, nil
+internal/tui/agent_selector.go-		case "enter", "ctrl+m", "ctrl+j":
+internal/tui/agent_selector.go-			if len(m.agents) > 0 {
+internal/tui/agent_selector.go-				m.selectedID = m.agents[m.cursor].ID
+internal/tui/agent_selector.go-				m.done = true
+internal/tui/agent_selector.go-			}
+--
+internal/tui/chat_tui.go-		return nil
+internal/tui/chat_tui.go-	}
+internal/tui/chat_tui.go-	return err
+internal/tui/chat_tui.go-}
+internal/tui/chat_tui.go-
+internal/tui/chat_tui.go:func (m chatModel) Init() tea.Cmd {
+internal/tui/chat_tui.go-	cmds := []tea.Cmd{waitCtxDone(m.ctx), statusTickCmd()}
+internal/tui/chat_tui.go-	if m.planSub != nil {
+
+=== AgentSwitcher ===
+internal/tui/chat.go-}
+internal/tui/chat.go-
+internal/tui/chat.go:// AgentSwitcher allows the TUI to list and switch between agents.
+internal/tui/chat.go-// Implemented in main.go to avoid importing the agent package here.
+internal/tui/chat.go:type AgentSwitcher interface {
+internal/tui/chat.go-	SwitchAgent(agentID string) (brain engine.Brain, name, emoji string, err error)
+internal/tui/chat.go-	ListAgentIDs() []string
+internal/tui/chat.go-	ListAgentInfo() []AgentInfo
+internal/tui/chat.go-	CreateAgent(ctx context.Context, id, name, provider, model, soul string) error
+internal/tui/chat.go-	RemoveAgent(ctx context.Context, id string) error
+internal/tui/chat.go-}
+internal/tui/chat.go-
+internal/tui/chat.go-// ChatConfig holds the dependencies for the chat REPL.
+internal/tui/chat.go-type ChatConfig struct {
+internal/tui/chat.go-	Brain        engine.Brain
+internal/tui/chat.go-	Store        *persistence.Store
+internal/tui/chat.go-	Policy       *policy.LivePolicy
+internal/tui/chat.go-	ModelName    string
+internal/tui/chat.go-	HomeDir      string
+internal/tui/chat.go-	Cfg          *config.Config
+internal/tui/chat.go-	CancelFunc   context.CancelFunc
+internal/tui/chat.go-	Providers    []tools.SearchProvider
+internal/tui/chat.go-	AgentName    string
+internal/tui/chat.go-	AgentEmoji   string
+internal/tui/chat.go:	Switcher     AgentSwitcher // nil = single agent mode (backward compat)
+internal/tui/chat.go-	CurrentAgent string
+internal/tui/chat.go-	EventBus     *bus.Bus // nil = no plan event tracking
+internal/tui/chat.go-}
+internal/tui/chat.go-
+internal/tui/chat.go-// RunChat runs an interactive chat UI on stdin/stdout.
+internal/tui/chat.go-// It blocks until the user types /quit, presses ctrl+d, or quits via the UI.
+internal/tui/chat.go-func RunChat(ctx context.Context, cc ChatConfig) error {
+internal/tui/chat.go-	sessionID := uuid.New().String()
+internal/tui/chat.go-	if err := cc.Store.EnsureSession(ctx, sessionID); err != nil {
+internal/tui/chat.go-		return fmt.Errorf("create session: %w", err)
+internal/tui/chat.go-	}
+internal/tui/chat.go-
+internal/tui/chat.go-	model := cc.ModelName
+internal/tui/chat.go-	if model == "" {
+internal/tui/chat.go-		model = "Gemini 2.5 Flash"
+
+=== SwitchAgent ===
+internal/tui/chat_tui.go-				return m, nil
+internal/tui/chat_tui.go-			}
+internal/tui/chat_tui.go-			if m.agentSelector.done {
+internal/tui/chat_tui.go-				agentID := m.agentSelector.selectedID
+internal/tui/chat_tui.go-				if agentID != "" && m.cc.Switcher != nil {
+internal/tui/chat_tui.go:					brain, name, emoji, err := m.cc.Switcher.SwitchAgent(agentID)
+internal/tui/chat_tui.go-					if err != nil {
+internal/tui/chat_tui.go-						m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error: %v", err)})
+internal/tui/chat_tui.go-					} else {
+internal/tui/chat_tui.go-						m.cc.Brain = brain
+internal/tui/chat_tui.go-						m.cc.AgentName = name
+internal/tui/chat_tui.go-						m.cc.AgentEmoji = emoji
+internal/tui/chat_tui.go-						m.cc.CurrentAgent = agentID
+internal/tui/chat_tui.go-						if name != "" && emoji != "" {
+internal/tui/chat_tui.go-							m.agentPrefix = fmt.Sprintf("%s %s", emoji, name)
+internal/tui/chat_tui.go-						} else if name != "" {
+internal/tui/chat_tui.go-							m.agentPrefix = name
+internal/tui/chat_tui.go-						} else {
+internal/tui/chat_tui.go-							m.agentPrefix = agentID
+internal/tui/chat_tui.go-						}
+internal/tui/chat_tui.go-						m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Switched to agent: %s", agentID)})
+internal/tui/chat_tui.go-					}
+internal/tui/chat_tui.go-				}
+internal/tui/chat_tui.go-				m.mode = chatModeChat
+internal/tui/chat_tui.go-				m.agentSelector = agentSelectorModel{}
+internal/tui/chat_tui.go-				return m, nil
+--
+internal/tui/chat.go-}
+internal/tui/chat.go-
+internal/tui/chat.go-// AgentSwitcher allows the TUI to list and switch between agents.
+internal/tui/chat.go-// Implemented in main.go to avoid importing the agent package here.
+internal/tui/chat.go-type AgentSwitcher interface {
+internal/tui/chat.go:	SwitchAgent(agentID string) (brain engine.Brain, name, emoji string, err error)
+internal/tui/chat.go-	ListAgentIDs() []string
+internal/tui/chat.go-	ListAgentInfo() []AgentInfo
+internal/tui/chat.go-	CreateAgent(ctx context.Context, id, name, provider, model, soul string) error
+internal/tui/chat.go-	RemoveAgent(ctx context.Context, id string) error
+internal/tui/chat.go-}
+internal/tui/chat.go-
+internal/tui/chat.go-// ChatConfig holds the dependencies for the chat REPL.
+
+=== Active Agent Field ===
+internal/tui/chat_tui.go:36:type brainReplyMsg struct {
+internal/tui/chat_tui.go:268:				agentID := m.agentSelector.selectedID
+internal/tui/chat_tui.go:269:				if agentID != "" && m.cc.Switcher != nil {
+internal/tui/chat_tui.go:270:					brain, name, emoji, err := m.cc.Switcher.SwitchAgent(agentID)
+internal/tui/chat_tui.go:274:						m.cc.Brain = brain
+internal/tui/chat_tui.go:277:						m.cc.CurrentAgent = agentID
+internal/tui/chat_tui.go:283:							m.agentPrefix = agentID
+internal/tui/chat_tui.go:285:						m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Switched to agent: %s", agentID)})
+internal/tui/chat_tui.go:486:	case brainReplyMsg:
+internal/tui/chat_tui.go:521:		if cc.Brain == nil {
+internal/tui/chat_tui.go:522:			return brainReplyMsg{err: fmt.Errorf("brain not configured")}
+internal/tui/chat_tui.go:531:		reply, err := cc.Brain.Respond(agentCtx, sessionID, prompt)
+internal/tui/chat_tui.go:537:		return brainReplyMsg{reply: reply, err: err}
+internal/tui/chat.go:30:	SwitchAgent(agentID string) (brain engine.Brain, name, emoji string, err error)
+internal/tui/chat.go:39:	Brain        engine.Brain
+internal/tui/chat.go:503:		brain, name, emoji, err := cc.Switcher.SwitchAgent(newID)
+internal/tui/chat.go:508:		cc.Brain = brain
+internal/tui/chat.go:535:			brain, name, emoji, err := cc.Switcher.SwitchAgent("default")
+internal/tui/chat.go:537:				cc.Brain = brain
+internal/tui/chat.go:551:		brain, name, emoji, err := cc.Switcher.SwitchAgent(arg)
+
+=== tuiAgentSwitcher ===
+				Cfg:          &cfg,
+				CancelFunc:   stop,
+				Providers:    defaultAgent.Brain.Providers(),
+				AgentName:    cfg.AgentName,
+				AgentEmoji:   cfg.AgentEmoji,
+				Switcher:     &tuiAgentSwitcher{reg: registry},
+				CurrentAgent: "default",
+				EventBus:     eventBus,
+			}); err != nil && ctx.Err() == nil {
+				logger.Error("chat exited with error", "error", err)
+			}
+			stop()
+		}()
+	}
+
+	select {
+	case <-ctx.Done():
+		logger.Info("shutdown signal received")
+	case err := <-serverErr:
+		logger.Error("gateway server error", "error", err)
+	}
+
+	// GC-SPEC-RUN-003: Graceful shutdown phases.
+	// 1. Stop intake (HTTP server shutdown stops new connections).
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = server.Shutdown(shutdownCtx)
+	// GC-SPEC-REL-005: Drain active lanes with bounded configurable timeout.
+	drainTimeout := time.Duration(cfg.DrainTimeoutSeconds) * time.Second
+	if drainTimeout <= 0 {
+		drainTimeout = 5 * time.Second
+	}
+	registry.DrainAll(drainTimeout)
+	// 3. Flush events + close DB handled by deferred store.Close().
+	logger.Info("shutdown complete")
+}
+
+// reconcileAgents reconciles the running agents with the new config.yaml agents section.
+func reconcileAgents(ctx context.Context, reg *agent.Registry,
+	newAgents, oldAgents []config.AgentConfigEntry, homeDir string, logger *slog.Logger) {
+	newMap := make(map[string]config.AgentConfigEntry)
+	for _, a := range newAgents {
+		newMap[a.AgentID] = a
+	}
+	oldMap := make(map[string]config.AgentConfigEntry)
+	for _, a := range oldAgents {
+--
+		a.TaskTimeoutSeconds == b.TaskTimeoutSeconds &&
+		a.MaxQueueDepth == b.MaxQueueDepth &&
+		a.PreferredSearch == b.PreferredSearch
+}
+
+// tuiAgentSwitcher adapts agent.Registry for the tui.AgentSwitcher interface.
+type tuiAgentSwitcher struct {
+	reg *agent.Registry
+}
+
+func (s *tuiAgentSwitcher) SwitchAgent(id string) (engine.Brain, string, string, error) {
+	ra := s.reg.GetAgent(id)
+	if ra == nil {
+
+=== CreateAgent Signature ===
+cmd/goclaw/main.go-}
+cmd/goclaw/main.go-
+cmd/goclaw/main.go:func (s *tuiAgentSwitcher) CreateAgent(ctx context.Context, id, name, provider, model, soul string) error {
+cmd/goclaw/main.go-	return s.reg.CreateAgent(ctx, agent.AgentConfig{
+cmd/goclaw/main.go-		AgentID:     id,
+cmd/goclaw/main.go-		DisplayName: name,
+cmd/goclaw/main.go-		Provider:    provider,
+cmd/goclaw/main.go-		Model:       model,
+cmd/goclaw/main.go-		Soul:        soul,
+cmd/goclaw/main.go-	})
+cmd/goclaw/main.go-}
+cmd/goclaw/main.go-
+cmd/goclaw/main.go-func (s *tuiAgentSwitcher) RemoveAgent(ctx context.Context, id string) error {
+
+=== Message Sending Path ===
+internal/engine/agent_scope_test.go-	if task.Status != persistence.TaskStatusSucceeded {
+internal/engine/agent_scope_test.go-		t.Fatalf("expected SUCCEEDED, got %s", task.Status)
+internal/engine/agent_scope_test.go-	}
+internal/engine/agent_scope_test.go-}
+internal/engine/agent_scope_test.go-
+internal/engine/agent_scope_test.go:func TestCreateChatTaskForAgent(t *testing.T) {
+internal/engine/agent_scope_test.go-	store := openStoreForEngineTest(t)
+internal/engine/agent_scope_test.go-	ctx := context.Background()
+internal/engine/agent_scope_test.go-	sessionID := "c3d4e5f6-a7b8-9012-cdef-123456789012"
+internal/engine/agent_scope_test.go-	agentID := "agent-alpha"
+internal/engine/agent_scope_test.go-
+internal/engine/agent_scope_test.go-	eng := engine.New(store, nil, engine.Config{
+internal/engine/agent_scope_test.go-		WorkerCount:  1,
+internal/engine/agent_scope_test.go-		PollInterval: 50 * time.Millisecond,
+internal/engine/agent_scope_test.go-		TaskTimeout:  5 * time.Second,
+internal/engine/agent_scope_test.go-	})
+internal/engine/agent_scope_test.go-
+internal/engine/agent_scope_test.go:	taskID, err := eng.CreateChatTaskForAgent(ctx, agentID, sessionID, "test message")
+internal/engine/agent_scope_test.go-	if err != nil {
+internal/engine/agent_scope_test.go-		t.Fatalf("create chat task for agent: %v", err)
+internal/engine/agent_scope_test.go-	}
+internal/engine/agent_scope_test.go-	if taskID == "" {
+internal/engine/agent_scope_test.go-		t.Fatal("expected non-empty task ID")
+internal/engine/agent_scope_test.go-	}
+internal/engine/agent_scope_test.go-
+internal/engine/agent_scope_test.go-	// Verify the task is stored with the correct agent_id.
+internal/engine/agent_scope_test.go-	task, err := store.GetTask(ctx, taskID)
+internal/engine/agent_scope_test.go-	if err != nil {
+internal/engine/agent_scope_test.go-		t.Fatalf("get task: %v", err)
+internal/engine/agent_scope_test.go-	}
+internal/engine/agent_scope_test.go-	if task.AgentID != agentID {
+internal/engine/agent_scope_test.go-		t.Fatalf("expected agent_id %q, got %q", agentID, task.AgentID)
+internal/engine/agent_scope_test.go-	}
+--
+internal/engine/agent_scope_test.go-	if got := procB.maxObserved.Load(); got != 1 {
+internal/engine/agent_scope_test.go-		t.Fatalf("agent-B: expected max 1 concurrent task, got %d", got)
+internal/engine/agent_scope_test.go-	}
+internal/engine/agent_scope_test.go-}
+internal/engine/agent_scope_test.go-
+internal/engine/agent_scope_test.go:func TestCreateChatTaskForAgent_Backpressure(t *testing.T) {
+
+=== Config Struct ===
+}
+
+type Config struct {
+	HomeDir string `yaml:"-"`
+
+	WorkerCount        int    `yaml:"worker_count"`
+	TaskTimeoutSeconds int    `yaml:"task_timeout_seconds"`
+	BindAddr           string `yaml:"bind_addr"`
+	LogLevel           string `yaml:"log_level"`
+
+	LLM LLMProviderConfig `yaml:"llm"`
+
+	// Deprecated: use LLM.Provider instead.
+	LLMProvider string `yaml:"llm_provider"`
+	// Deprecated: use LLM.GeminiModel instead.
+	GeminiModel string `yaml:"gemini_model"`
+	// Deprecated: use LLMProviderAPIKey("google") instead.
+	GeminiAPIKey string `yaml:"gemini_api_key"`
+
+	// APIKeys holds centralized API keys for tools and integrations.
+	// Keys: "brave_search", etc. Env vars override: BRAVE_API_KEY → api_keys["brave_search"].
+	APIKeys map[string]string `yaml:"api_keys"`
+
+	// Providers holds per-provider configuration (API keys, custom endpoints, extra models).
+	Providers map[string]ProviderConfig `yaml:"providers"`
+
+	AgentName  string `yaml:"agent_name"`
+	AgentEmoji string `yaml:"agent_emoji"`
+
+	SOUL   string `yaml:"-"`
+	AGENTS string `yaml:"-"`
+
+	// PreferredSearch names the search provider to try first (e.g. "perplexity_search").
+	// Empty uses the default order: brave → perplexity → duckduckgo.
+	PreferredSearch string `yaml:"preferred_search"`
+
+	// AllowOrigins controls which Origin headers are accepted for browser WS connections (GC-SPEC-ACP-004).
+	// Empty means local-only (no browser Origin required).
+	AllowOrigins []string `yaml:"allow_origins"`
+
+	// GC-SPEC-QUE-008: Maximum pending tasks before backpressure. 0 = unlimited.
+	MaxQueueDepth int `yaml:"max_queue_depth"`
+
+
+=== AgentConfigEntry ===
+
+// AgentConfigEntry defines a named agent to create on startup.
+type AgentConfigEntry struct {
+	AgentID            string   `yaml:"agent_id"`
+	DisplayName        string   `yaml:"display_name"`
+	Provider           string   `yaml:"provider"`
+	Model              string   `yaml:"model"`
+	APIKeyEnv          string   `yaml:"api_key_env"`
+	Soul               string   `yaml:"soul"`
+	SoulFile           string   `yaml:"soul_file"`
+	WorkerCount        int      `yaml:"worker_count"`
+	TaskTimeoutSeconds int      `yaml:"task_timeout_seconds"`
+	MaxQueueDepth      int      `yaml:"max_queue_depth"`
+	SkillsFilter       []string `yaml:"skills_filter"`
+	PreferredSearch    string   `yaml:"preferred_search"`
+}
+
+type Config struct {
+	HomeDir string `yaml:"-"`
+
+	WorkerCount        int    `yaml:"worker_count"`
+	TaskTimeoutSeconds int    `yaml:"task_timeout_seconds"`
+	BindAddr           string `yaml:"bind_addr"`
+	LogLevel           string `yaml:"log_level"`
+
+	LLM LLMProviderConfig `yaml:"llm"`
+
+	// Deprecated: use LLM.Provider instead.
+	LLMProvider string `yaml:"llm_provider"`
+	// Deprecated: use LLM.GeminiModel instead.
+	GeminiModel string `yaml:"gemini_model"`
+	// Deprecated: use LLMProviderAPIKey("google") instead.
+	GeminiAPIKey string `yaml:"gemini_api_key"`
+
+=== Config Capabilities ===
+(not found)
+
+=== Config Load ===
+}
+
+func Load() (Config, error) {
+	cfg := defaultConfig()
+	cfg.HomeDir = HomeDir()
+
+	if err := os.MkdirAll(cfg.HomeDir, 0o755); err != nil {
+		return cfg, fmt.Errorf("create goclaw home: %w", err)
+	}
+
+	configPath := filepath.Join(cfg.HomeDir, "config.yaml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+
+=== Config Write ===
+298:	out, err := yaml.Marshal(raw)
+302:	return os.WriteFile(path, out, 0o644)
+
+=== First-Run Config ===
+internal/config/config.go-
+internal/config/config.go-// ConfigPath returns the path to config.yaml within the given home directory.
+internal/config/config.go-func ConfigPath(homeDir string) string {
+internal/config/config.go-	return filepath.Join(homeDir, "config.yaml")
+internal/config/config.go-}
+internal/config/config.go-
+internal/config/config.go-// loadRawConfig reads config.yaml into a generic map, returning an empty map if the file doesn't exist.
+internal/config/config.go-func loadRawConfig(path string) (map[string]interface{}, error) {
+internal/config/config.go-	raw := make(map[string]interface{})
+internal/config/config.go-	data, err := os.ReadFile(path)
+internal/config/config.go:	if err != nil && !os.IsNotExist(err) {
+internal/config/config.go-		return nil, fmt.Errorf("read config.yaml: %w", err)
+internal/config/config.go-	}
+internal/config/config.go-	if len(data) > 0 {
+internal/config/config.go-		if err := yaml.Unmarshal(data, &raw); err != nil {
+internal/config/config.go-			return nil, fmt.Errorf("parse config.yaml: %w", err)
+internal/config/config.go-		}
+internal/config/config.go-	}
+internal/config/config.go-	return raw, nil
+internal/config/config.go-}
+internal/config/config.go-
+internal/config/config.go-// saveRawConfig marshals and writes a generic map back to config.yaml.
+internal/config/config.go-func saveRawConfig(path string, raw map[string]interface{}) error {
+internal/config/config.go-	out, err := yaml.Marshal(raw)
+internal/config/config.go-	if err != nil {
+internal/config/config.go-		return fmt.Errorf("marshal config.yaml: %w", err)
+internal/config/config.go-	}
+internal/config/config.go-	return os.WriteFile(path, out, 0o644)
+internal/config/config.go-}
+internal/config/config.go-
+internal/config/config.go-// SetModel updates the LLM provider and model in config.yaml, preserving other settings.
+internal/config/config.go-func SetModel(homeDir, provider, model string) error {
+internal/config/config.go-	configPath := ConfigPath(homeDir)
+internal/config/config.go-	raw, err := loadRawConfig(configPath)
+internal/config/config.go-	if err != nil {
+internal/config/config.go-		return err
+internal/config/config.go-	}
+internal/config/config.go-	raw["llm_provider"] = provider
+internal/config/config.go-	raw["gemini_model"] = model
+internal/config/config.go-	return saveRawConfig(configPath, raw)
+internal/config/config.go-}
+--
+internal/config/config.go-}
+internal/config/config.go-
+internal/config/config.go-// Fingerprint returns a stable hash of the active config (GC-SPEC-CFG-005).
+internal/config/config.go-func (c Config) Fingerprint() string {
+internal/config/config.go-	h := fnv.New64a()
+internal/config/config.go-	fmt.Fprintf(h, "workers=%d|timeout=%d|bind=%s|log=%s|model=%s|origins=%v",
+internal/config/config.go-		c.WorkerCount, c.TaskTimeoutSeconds, c.BindAddr, c.LogLevel, c.GeminiModel, c.AllowOrigins)
+internal/config/config.go-	return fmt.Sprintf("cfg-%x", h.Sum64())
+internal/config/config.go-}
+internal/config/config.go-
+internal/config/config.go:func defaultConfig() Config {
+internal/config/config.go-	return Config{
+internal/config/config.go-		WorkerCount:              16,
+internal/config/config.go-		TaskTimeoutSeconds:       int((10 * time.Minute).Seconds()),
+internal/config/config.go-		BindAddr:                 "127.0.0.1:18789",
+internal/config/config.go-		LogLevel:                 "info",
+internal/config/config.go-		MaxQueueDepth:            100,
+internal/config/config.go-		DrainTimeoutSeconds:      5,
+internal/config/config.go-		RetentionTaskEventsDays:  90,
+internal/config/config.go-		RetentionAuditLogDays:    365,
+internal/config/config.go-		RetentionMessagesDays:    90,
+internal/config/config.go-		HeartbeatIntervalMinutes: 30,
+internal/config/config.go-		Skills: SkillsConfig{
+internal/config/config.go-			ProjectDir: "./skills",
+internal/config/config.go-			ExtraDirs:  nil, LegacyMode: false,
+internal/config/config.go-		},
+internal/config/config.go-	}
+internal/config/config.go-}
+internal/config/config.go-
+internal/config/config.go-func HomeDir() string {
+internal/config/config.go-	if override := os.Getenv("GOCLAW_HOME"); override != "" {
+internal/config/config.go-		return override
+internal/config/config.go-	}
+internal/config/config.go-	home, err := os.UserHomeDir()
+internal/config/config.go-	if err != nil || home == "" {
+internal/config/config.go-		home = "."
+internal/config/config.go-	}
+internal/config/config.go-	return filepath.Join(home, ".goclaw")
+
+=== YAML Tags ===
+	APIKey  string   `yaml:"api_key"`
+	BaseURL string   `yaml:"base_url"` // custom endpoint (e.g. OpenRouter)
+	Models  []string `yaml:"models"`   // user-added models (merged with built-ins)
+	Provider string `yaml:"provider"`
+	GeminiModel string `yaml:"gemini_model"`
+	AnthropicModel string `yaml:"anthropic_model"`
+	OpenAIModel string `yaml:"openai_model"`
+	OpenAICompatibleProvider string `yaml:"openai_compatible_provider"` // provider name for model prefix
+	OpenAICompatibleBaseURL  string `yaml:"openai_compatible_base_url"` // e.g. https://api.openai.com/v1
+	FallbackProviders []string `yaml:"fallback_providers"`
+	FailoverThreshold int `yaml:"failover_threshold"`
+	FailoverCooldownSeconds int `yaml:"failover_cooldown_seconds"`
+	ProjectDir string   `yaml:"project_dir"`
+	ExtraDirs  []string `yaml:"extra_dirs"`
+	LegacyMode bool     `yaml:"legacy_mode"`
+	Sandbox        bool   `yaml:"sandbox"`
+	SandboxImage   string `yaml:"sandbox_image"`
+	SandboxMemory  int64  `yaml:"sandbox_memory_mb"`
+	SandboxNetwork string `yaml:"sandbox_network"`
+	Shell ShellConfig `yaml:"shell"`
+
+=== Agent Registry ===
+62:func (r *Registry) RegisterTestAgent(agentID string, eng *engine.Engine) {
+89:func (r *Registry) SetOnAgentCreated(fn func(ra *RunningAgent)) {
+96:func (r *Registry) CreateAgent(ctx context.Context, cfg AgentConfig) error {
+215:func (r *Registry) RemoveAgent(ctx context.Context, agentID string, drainTimeout time.Duration) error {
+241:func (r *Registry) GetAgent(agentID string) *RunningAgent {
+248:func (r *Registry) ListAgents() []AgentConfig {
+259:func (r *Registry) ListRunningAgents() []*RunningAgent {
+270:func (r *Registry) AgentStatus(agentID string) (*engine.Status, error) {
+282:func (r *Registry) CreateChatTask(ctx context.Context, agentID, sessionID, content string) (string, error) {
+293:func (r *Registry) StreamChatTask(ctx context.Context, agentID, sessionID, content string, onChunk func(string) error) (string, error) {
+304:func (r *Registry) AbortTask(ctx context.Context, taskID string) (bool, error) {
+322:func (r *Registry) DrainAll(timeout time.Duration) {
+343:func (r *Registry) RestorePersistedAgents(ctx context.Context) error {
+
+=== Bus Events Published ===
+internal/tools/delegate.go:152:		store.Bus().Publish(bus.TopicDelegationStarted, map[string]interface{}{
+internal/tools/delegate.go:208:		store.Bus().Publish(bus.TopicDelegationCompleted, map[string]interface{}{
+internal/coordinator/executor.go:241:			e.store.Bus().Publish("plan.step.started", map[string]interface{}{
+internal/bus/bus_test.go:16:	b.Publish("test.event", "hello")
+internal/bus/bus_test.go:42:	b.Publish("task.created", "new task")
+internal/bus/bus_test.go:43:	b.Publish("system.status", "ok")
+internal/bus/bus_test.go:85:		b.Publish("test.event", i)
+internal/bus/bus_test.go:132:	b.Publish("test.event", "shared")
+internal/bus/bus_test.go:146:func TestBus_ConcurrentPublish(t *testing.T) {
+internal/bus/bus_test.go:161:				b.Publish("concurrent", id*100+i)
+internal/bus/bus_test.go:192:		b.Publish("test.event", i)
+internal/bus/bus_test.go:197:		b.Publish("test.event", "drop")
+internal/bus/bus_test.go:219:		b.Publish("test.event", i)
+internal/bus/bus_test.go:223:	b.Publish("test.event", "drop1")
+internal/bus/bus_test.go:238:		b.Publish("test.event", "drop")
+internal/bus/bus.go:136:func (b *Bus) Publish(topic string, payload interface{}) {
+internal/persistence/store.go:1663:			s.bus.Publish("task.completed", map[string]interface{}{
+internal/persistence/store.go:1714:			s.bus.Publish("task.failed", map[string]interface{}{
+internal/persistence/store.go:2220:			s.bus.Publish("task.canceled", map[string]interface{}{
+internal/persistence/store.go:3482:		s.bus.Publish(bus.TopicTaskTokens, bus.TaskTokensEvent{
+internal/persistence/store.go:3524:		s.bus.Publish(bus.TopicTaskMetrics, bus.TaskMetricsEvent{
+internal/persistence/store.go:3832:		s.bus.Publish(bus.TopicPlanExecutionStarted, map[string]interface{}{
+internal/persistence/store.go:3881:		s.bus.Publish(bus.TopicPlanExecutionCompleted, map[string]interface{}{
+internal/persistence/store.go:4072:		s.bus.Publish(bus.TopicPlanStepCompleted, map[string]interface{}{
+internal/engine/engine.go:348:		e.bus.Publish(topic, payload)
+internal/gateway/gateway_test.go:1661:		eventBus.Publish("test.event", i)
+internal/gateway/gateway_test.go:1665:		eventBus.Publish("test.event", "overflow")
+internal/gateway/gateway_test.go:2033:	b.Publish("task.succeeded", map[string]string{
+
+=== Bus Subscribe ===
+internal/bus/bus_test.go-	"sync"
+internal/bus/bus_test.go-	"testing"
+internal/bus/bus_test.go-	"time"
+internal/bus/bus_test.go-)
+internal/bus/bus_test.go-
+internal/bus/bus_test.go:func TestBus_PublishSubscribe(t *testing.T) {
+internal/bus/bus_test.go-	b := New()
+internal/bus/bus_test.go-	sub := b.Subscribe("test")
+internal/bus/bus_test.go-	defer b.Unsubscribe(sub)
+internal/bus/bus_test.go-
+internal/bus/bus_test.go-	b.Publish("test.event", "hello")
+internal/bus/bus_test.go-
+internal/bus/bus_test.go-	select {
+internal/bus/bus_test.go-	case event := <-sub.Ch():
+internal/bus/bus_test.go-		if event.Topic != "test.event" {
+internal/bus/bus_test.go-			t.Fatalf("topic = %q, want %q", event.Topic, "test.event")
+internal/bus/bus_test.go-		}
+internal/bus/bus_test.go-		if event.Payload != "hello" {
+internal/bus/bus_test.go-			t.Fatalf("payload = %v, want %q", event.Payload, "hello")
+internal/bus/bus_test.go-		}
+internal/bus/bus_test.go-	case <-time.After(time.Second):
+--
+internal/bus/bus_test.go-	if ok {
+internal/bus/bus_test.go-		t.Fatal("expected closed channel")
+internal/bus/bus_test.go-	}
+internal/bus/bus_test.go-}
+internal/bus/bus_test.go-
+internal/bus/bus_test.go:func TestBus_MultipleSubscribers(t *testing.T) {
+internal/bus/bus_test.go-	b := New()
+internal/bus/bus_test.go-	sub1 := b.Subscribe("test")
+internal/bus/bus_test.go-	sub2 := b.Subscribe("test")
+internal/bus/bus_test.go-	defer b.Unsubscribe(sub1)
+internal/bus/bus_test.go-	defer b.Unsubscribe(sub2)
+internal/bus/bus_test.go-
+internal/bus/bus_test.go-	b.Publish("test.event", "shared")
+internal/bus/bus_test.go-
+internal/bus/bus_test.go-	for _, sub := range []*Subscription{sub1, sub2} {
+internal/bus/bus_test.go-		select {
+internal/bus/bus_test.go-		case event := <-sub.Ch():
+internal/bus/bus_test.go-			if event.Payload != "shared" {
+internal/bus/bus_test.go-				t.Fatalf("payload = %v, want shared", event.Payload)
+internal/bus/bus_test.go-			}
+internal/bus/bus_test.go-		case <-time.After(time.Second):
+--
+internal/bus/bus.go-
+internal/bus/bus.go-// Subscribe creates a subscription for events matching the given topic prefix.
+internal/bus/bus.go-// An empty prefix matches all topics.
+internal/bus/bus.go-// The returned channel has a buffer of 100 events; slow consumers will miss events
+internal/bus/bus.go-// (non-blocking send).
+internal/bus/bus.go:func (b *Bus) Subscribe(topicPrefix string) *Subscription {
+internal/bus/bus.go-	b.mu.Lock()
+internal/bus/bus.go-	defer b.mu.Unlock()
+internal/bus/bus.go-
+internal/bus/bus.go-	b.nextID++
+internal/bus/bus.go-	sub := &Subscription{
+internal/bus/bus.go-		id:     b.nextID,
+internal/bus/bus.go-		prefix: topicPrefix,
+internal/bus/bus.go-		ch:     make(chan Event, defaultBufferSize),
+internal/bus/bus.go-	}
+internal/bus/bus.go-	b.subs[sub.id] = sub
+internal/bus/bus.go-	return sub
+internal/bus/bus.go-}
+internal/bus/bus.go-
+internal/bus/bus.go-// Unsubscribe removes a subscription and closes its channel.
+internal/bus/bus.go-func (b *Bus) Unsubscribe(sub *Subscription) {
+--
+internal/bus/bus.go-		}
+internal/bus/bus.go-	}
+internal/bus/bus.go-}
+internal/bus/bus.go-
+internal/bus/bus.go-// SubscriberCount returns the number of active subscriptions.
+internal/bus/bus.go:func (b *Bus) SubscriberCount() int {
+internal/bus/bus.go-	b.mu.RLock()
+internal/bus/bus.go-	defer b.mu.RUnlock()
+internal/bus/bus.go-	return len(b.subs)
+internal/bus/bus.go-}
+internal/bus/bus.go-
+internal/bus/bus.go-// DroppedEventCount returns the total number of events dropped due to full buffers.
+internal/bus/bus.go-func (b *Bus) DroppedEventCount() int64 {
+internal/bus/bus.go-	return b.droppedEvents.Load()
+internal/bus/bus.go-}
+internal/bus/bus.go-
+internal/bus/bus.go-// dropThreshold returns the next exponential threshold (1, 10, 100, 1000, ...) at or below count.
+internal/bus/bus.go-func dropThreshold(count int64) int64 {
+internal/bus/bus.go-	threshold := int64(1)
+internal/bus/bus.go-	for threshold*10 <= count {
+internal/bus/bus.go-		threshold *= 10
+
+=== Bus Event Types ===
+internal/bus/bus.go-
+internal/bus/bus.go-// Event is a message published on the bus.
+internal/bus/bus.go:type Event struct {
+internal/bus/bus.go-	Topic   string
+internal/bus/bus.go-	Payload interface{}
+internal/bus/bus.go-}
+internal/bus/bus.go-
+internal/bus/bus.go-// Task event topics.
+internal/bus/bus.go-const (
+internal/bus/bus.go-	TopicTaskStateChanged = "task.state_changed"
+internal/bus/bus.go-	TopicTaskMetrics      = "task.metrics"
+internal/bus/bus.go-	TopicTaskTokens       = "task.tokens"
+internal/bus/bus.go-	TopicTaskCompleted    = "task.completed"
+
+=== CLI Subcommands ===
+(not found)
+
+=== Help Text ===
+(not found)
+
+=== Error Display ===
+(not found)
+
+=== Model Strings ===
+internal/engine/brain_test.go:184:	want := "anthropic/claude-sonnet-4-5-20250929"
+internal/engine/brain_test.go:191:	got := modelNameForProvider("openrouter", "anthropic/claude-sonnet-4-5-20250929")
+internal/engine/brain_test.go:192:	want := "anthropic/claude-sonnet-4-5-20250929"
+internal/engine/brain.go:316:		return "claude-3-5-sonnet-20241022"
+internal/engine/brain.go:318:		return "gpt-4o-mini"
+internal/engine/brain.go:320:		return "gpt-4o-mini"
+internal/engine/brain.go:322:		return "anthropic/claude-sonnet-4-5-20250929"
+internal/engine/brain.go:324:		return "gemini-2.5-flash"
+internal/engine/brain.go:361:		return model // OpenRouter uses full model names like "anthropic/claude-sonnet-4-5-20250929"
+internal/config/config.go:28:	GeminiModel string `yaml:"gemini_model"`
+internal/config/config.go:120:	GeminiModel string `yaml:"gemini_model"`
+internal/config/config.go:122:	GeminiAPIKey string `yaml:"gemini_api_key"`
+internal/config/config.go:313:	raw["gemini_model"] = model
+internal/config/config.go:419:	if cfg.LLMProvider == "gemini" {
+internal/config/config.go:423:		cfg.GeminiModel = "gemini-2.5-flash"
+internal/config/config.go:429:	// Backward compat: copy gemini_api_key into providers.gemini.api_key if not set.
+internal/config/config.go:492:	// Legacy fallback for gemini.
+
+=== Version String ===
+43:// Version is set via ldflags at build time: -ldflags "-X main.Version=..."
+44:var Version = "dev"
+186:	// GC-SPEC-CFG-006: Record policy version in DB on load.
+187:	polVersion := pol.PolicyVersion()
+188:	if err := store.RecordPolicyVersion(ctx, polVersion, polVersion, policyPath); err != nil {
+
+=== END PRE-FLIGHT ===

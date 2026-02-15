@@ -381,6 +381,53 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+
+		// Parse @mentions. Path B: all mentions use sticky switch (v0.2).
+		// TODO(v0.2.1): implement Path A single-message routing when agentID can override.
+		mention := ParseMention(line)
+		if mention.AgentID != "" {
+			// Validate agent exists
+			agentIDs := m.cc.Switcher.ListAgentIDs()
+			found := false
+			for _, id := range agentIDs {
+				if id == mention.AgentID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				available := strings.Join(agentIDs, ", @")
+				m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Unknown agent: @%s. Available: @%s", mention.AgentID, available)})
+				return m, nil
+			}
+
+			// Switch to target agent
+			brain, name, emoji, err := m.cc.Switcher.SwitchAgent(mention.AgentID)
+			if err != nil {
+				m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error switching to @%s: %v", mention.AgentID, err)})
+				return m, nil
+			}
+			m.cc.Brain = brain
+			m.cc.AgentName = name
+			m.cc.AgentEmoji = emoji
+			m.cc.CurrentAgent = mention.AgentID
+			if name != "" && emoji != "" {
+				m.agentPrefix = fmt.Sprintf("%s %s", emoji, name)
+			} else if name != "" {
+				m.agentPrefix = name
+			} else {
+				m.agentPrefix = mention.AgentID
+			}
+
+			// Send message if provided
+			if mention.Message == "" {
+				// Bare @agent — just switched, no message to send
+				m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Switched to agent: @%s", mention.AgentID)})
+				return m, nil
+			}
+
+			line = mention.Message // Update line to the actual message
+		}
 			// User message.
 			m.history = append(m.history, chatEntry{role: chatRoleUser, text: line})
 			if m.cc.Store != nil {
@@ -575,9 +622,13 @@ func (m chatModel) View() string {
 		b.WriteString("\n")
 	}
 
-	// Input.
+	// Input. Show current agent ID in prompt (e.g., "coder> " or "@coder> ").
 	b.WriteString("\n")
-	b.WriteString("> ")
+	if m.cc.CurrentAgent != "" && m.cc.CurrentAgent != "default" {
+		b.WriteString(fmt.Sprintf("@%s> ", m.cc.CurrentAgent))
+	} else {
+		b.WriteString("> ")
+	}
 	b.WriteString(renderCursor(string(m.input), m.cursor))
 	b.WriteString("\n")
 	if m.thinking {
@@ -601,14 +652,17 @@ func (m chatModel) renderHistoryLines() []string {
 	lines := make([]string, 0, len(m.history)*2)
 	for _, e := range m.history {
 		prefix := ""
+		text := e.text
 		switch e.role {
 		case chatRoleUser:
 			prefix = "You: "
+			// Highlight @mentions in cyan
+			text = HighlightMention(text)
 		case chatRoleAssistant:
 			prefix = m.agentPrefix + ": "
 		}
 
-		lines = append(lines, m.wrapWithPrefix(e.text, prefix)...)
+		lines = append(lines, m.wrapWithPrefix(text, prefix)...)
 	}
 	return lines
 }
