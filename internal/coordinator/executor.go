@@ -25,7 +25,7 @@ type Executor struct {
 	store      *persistence.Store
 }
 
-// New creates a DAG executor with completion tracking.
+// NewExecutor creates a DAG executor with completion tracking.
 func NewExecutor(router ChatTaskRouter, waiter *Waiter, store *persistence.Store) *Executor {
 	return &Executor{
 		taskRouter: router,
@@ -151,17 +151,12 @@ func resolvePrompt(template string, result *ExecutionResult) string {
 // topoSort performs topological sort on plan steps and returns them grouped by wave.
 // Steps with no dependencies form wave 0, steps depending only on wave 0 form wave 1, etc.
 func topoSort(steps []PlanStep) ([][]PlanStep, error) {
-	// Build dependency graph
-	depCount := make(map[string]int)    // in-degree for each step
-	dependents := make(map[string][]PlanStep) // steps that depend on this step
 	stepMap := make(map[string]PlanStep)
-
 	for _, s := range steps {
 		stepMap[s.ID] = s
-		depCount[s.ID] = len(s.DependsOn)
 	}
 
-	// Check for unknown dependencies
+	// Check for unknown dependencies.
 	for _, s := range steps {
 		for _, dep := range s.DependsOn {
 			if _, exists := stepMap[dep]; !exists {
@@ -170,14 +165,7 @@ func topoSort(steps []PlanStep) ([][]PlanStep, error) {
 		}
 	}
 
-	// Build reverse dependency graph (who depends on me)
-	for _, s := range steps {
-		for _, dep := range s.DependsOn {
-			dependents[dep] = append(dependents[dep], s)
-		}
-	}
-
-	// Kahn's algorithm for topological sort into waves
+	// Kahn's algorithm for topological sort into waves.
 	var waves [][]PlanStep
 	processed := make(map[string]bool)
 

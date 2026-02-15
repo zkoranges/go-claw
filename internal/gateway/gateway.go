@@ -71,6 +71,9 @@ type Config struct {
 	// SkillsStatus returns the current skill catalog status for system.status.
 	// It should be safe to call concurrently.
 	SkillsStatus func(ctx context.Context) ([]tools.SkillStatus, error)
+
+	// Plans holds configured workflow plans (GC-SPEC-PDR-v4-Phase-4).
+	Plans map[string]PlanSummary
 }
 
 type Server struct {
@@ -82,8 +85,6 @@ type Server struct {
 	approvalsMu sync.Mutex
 	approvals   map[string]*approvalRequest
 
-	// plans holds configured workflow plans (GC-SPEC-PDR-v4-Phase-4: Plan system).
-	// TODO: Implement /api/plans endpoints for plan execution and management.
 }
 
 type client struct {
@@ -1605,6 +1606,14 @@ func (s *Server) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// PlanSummary is a lightweight view of a configured plan for the REST API.
+// GC-SPEC-PDR-v4-Phase-4: Plan system.
+type PlanSummary struct {
+	Name      string   `json:"name"`
+	StepCount int      `json:"step_count"`
+	AgentIDs  []string `json:"agent_ids"`
+}
+
 // handleAPIPlans returns the list of configured plans (GC-SPEC-PDR-v4-Phase-4: Plan system).
 func (s *Server) handleAPIPlans(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1615,8 +1624,10 @@ func (s *Server) handleAPIPlans(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	plans := make([]PlanSummary, 0, len(s.cfg.Plans))
+	for _, p := range s.cfg.Plans {
+		plans = append(plans, p)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	// TODO: Return actual plans once plans are passed to gateway.Config
-	// For now, return empty list to satisfy API contract
-	_ = json.NewEncoder(w).Encode(map[string]any{"plans": []any{}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"plans": plans})
 }

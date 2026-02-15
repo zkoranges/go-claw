@@ -296,7 +296,7 @@ The system runs this checklist periodically to ensure health.
 	}
 
 	// Load plans from config (GC-SPEC-PDR-v4-Phase-4: Plan system).
-	var loadedPlans map[string]coordinator.Plan
+	planSummaries := make(map[string]gateway.PlanSummary)
 	if len(cfg.Plans) > 0 {
 		agentConfigs := registry.ListAgents()
 		agentIDs := make([]string, 0, len(agentConfigs))
@@ -307,8 +307,22 @@ The system runs this checklist periodically to ensure health.
 		if err != nil {
 			logger.Warn("failed to load plans from config", "error", err)
 		} else {
-			loadedPlans = plans
-			logger.Info("plans loaded from config", "count", len(loadedPlans))
+			for name, p := range plans {
+				agents := make(map[string]bool)
+				for _, s := range p.Steps {
+					agents[s.AgentID] = true
+				}
+				agentList := make([]string, 0, len(agents))
+				for a := range agents {
+					agentList = append(agentList, a)
+				}
+				planSummaries[name] = gateway.PlanSummary{
+					Name:      name,
+					StepCount: len(p.Steps),
+					AgentIDs:  agentList,
+				}
+			}
+			logger.Info("plans loaded from config", "count", len(planSummaries))
 		}
 	}
 
@@ -787,6 +801,7 @@ The system runs this checklist periodically to ensure health.
 		ToolsUpdated:      toolsUpdated,
 		TinygoStatus:      wasmWatcher.TinygoStatus,
 		SkillsStatus:      skillsStatusFn,
+		Plans:             planSummaries,
 	})
 
 	server := &http.Server{
