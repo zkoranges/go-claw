@@ -13,7 +13,7 @@ import (
 
 // TestTelegram_SubscribesToEvents verifies event subscriptions work without panic.
 func TestTelegram_SubscribesToEvents(t *testing.T) {
-	// TDD: Verify subscribeToEvents() works without panic
+	// TDD: Verify event bus integration works (don't call SubscribeToEvents since bot is nil)
 	tg := NewTelegramChannel(
 		"test-token",
 		[]int64{123456},
@@ -23,12 +23,7 @@ func TestTelegram_SubscribesToEvents(t *testing.T) {
 		bus.New(), // eventBus
 	)
 
-	// subscribeToEvents should subscribe without panic
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Call subscribeToEvents directly (if accessible) or test through Start
-	// For now, verify the channel has eventBus set
+	// Verify the channel has eventBus set
 	if tg.eventBus == nil {
 		t.Fatal("eventBus not set on Telegram channel")
 	}
@@ -41,7 +36,7 @@ func TestTelegram_SubscribesToEvents(t *testing.T) {
 		t.Fatal("subscription failed")
 	}
 
-	// Publish a test event to verify no panic
+	// Publish a test event to verify bus integration
 	testEvent := bus.PlanStepEvent{
 		ExecutionID: "exec-123",
 		StepID:      "step-456",
@@ -63,7 +58,7 @@ func TestTelegram_SubscribesToEvents(t *testing.T) {
 		if payload.ExecutionID != "exec-123" {
 			t.Errorf("expected execution ID exec-123, got %s", payload.ExecutionID)
 		}
-	case <-ctx.Done():
+	case <-context.Background().Done():
 		t.Fatal("timeout waiting for event")
 	}
 }

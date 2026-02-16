@@ -988,6 +988,10 @@ The system runs this checklist periodically to ensure health.
 				logger,
 				eventBus,
 			)
+
+			// GC-SPEC-PDR-v7-Phase-3: Subscribe to plan execution and HITL events
+			tg.SubscribeToEvents()
+
 			go func() {
 				if err := tg.Start(ctx); err != nil {
 					logger.Error("telegram channel failed", "error", err)

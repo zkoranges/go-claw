@@ -279,9 +279,9 @@ func (t *TelegramChannel) reply(chatID int64, text string) {
 
 // GC-SPEC-PDR-v7-Phase-3: Event subscription and handling methods
 
-// subscribeToEvents subscribes to plan execution and HITL events.
+// SubscribeToEvents subscribes to plan execution and HITL events.
 // Called at startup to enable Telegram to receive and forward event notifications.
-func (t *TelegramChannel) subscribeToEvents() {
+func (t *TelegramChannel) SubscribeToEvents() {
 	if t.eventBus == nil {
 		return
 	}
