@@ -29,11 +29,12 @@ type Executor struct {
 }
 
 // NewExecutor creates a DAG executor with completion tracking.
-func NewExecutor(router ChatTaskRouter, waiter *Waiter, store *persistence.Store) *Executor {
+func NewExecutor(router ChatTaskRouter, waiter *Waiter, store *persistence.Store, b *bus.Bus) *Executor {
 	return &Executor{
 		taskRouter: router,
 		waiter:     waiter,
 		store:      store,
+		bus:        b,
 	}
 }
 

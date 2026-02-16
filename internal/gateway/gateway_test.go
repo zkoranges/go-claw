@@ -2429,7 +2429,7 @@ func TestGateway_ExecutePlan(t *testing.T) {
 
 	// Create executor with a mock router (no waiter = test mode).
 	mockRouter := &testChatRouter{store: store}
-	executor := coordinator.NewExecutor(mockRouter, nil, store)
+	executor := coordinator.NewExecutor(mockRouter, nil, store, nil)
 
 	srv := gateway.New(gateway.Config{
 		Store:     store,

@@ -27,7 +27,7 @@ func (m *mockRouter) CreateChatTask(ctx context.Context, agentID, sessionID, con
 // GC-SPEC-PDR-v4-Phase-3: Test executor construction.
 func TestNewExecutor(t *testing.T) {
 	router := &mockRouter{}
-	exec := NewExecutor(router, nil, nil)
+	exec := NewExecutor(router, nil, nil, nil)
 	if exec == nil {
 		t.Fatal("expected non-nil executor")
 	}
@@ -157,7 +157,7 @@ func TestExecute_TestMode(t *testing.T) {
 		},
 	}
 
-	exec := NewExecutor(router, nil, nil)
+	exec := NewExecutor(router, nil, nil, nil)
 	result, err := exec.Execute(context.Background(), plan, "test-session")
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
@@ -201,7 +201,7 @@ func TestExecutor_Events(t *testing.T) {
 
 	// Executor with mock router and no waiter (test mode).
 	router := &mockRouter{}
-	exec := NewExecutor(router, nil, store)
+	exec := NewExecutor(router, nil, store, nil)
 
 	// Ensure the session exists (plan_executions has FK on sessions).
 	sessionID := "7ced61c5-923f-41c2-ac40-d2137193a676"
@@ -347,7 +347,7 @@ func TestExecutor_Resume_FullRecovery(t *testing.T) {
 
 	// Create executor and resume
 	router := &mockRouter{}
-	executor := NewExecutor(router, nil, store)
+	executor := NewExecutor(router, nil, store, nil)
 	result, err := executor.Resume(ctx, execID, plan)
 	if err != nil {
 		t.Fatalf("resume: %v", err)
@@ -429,7 +429,7 @@ func TestExecutor_Resume_SkipsCompletedWaves(t *testing.T) {
 
 	// Resume - should skip waves 0-1 and execute only wave 2
 	router := &mockRouter{}
-	executor := NewExecutor(router, nil, store)
+	executor := NewExecutor(router, nil, store, nil)
 	result, err := executor.Resume(ctx, execID, plan)
 	if err != nil {
 		t.Fatalf("resume: %v", err)

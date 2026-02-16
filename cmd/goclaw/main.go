@@ -882,7 +882,7 @@ The system runs this checklist periodically to ensure health.
 
 	// Create plan executor (GC-SPEC-PDR-v4-Phase-4: Plan execution engine).
 	waiter := coordinator.NewWaiter(eventBus, store)
-	executor := coordinator.NewExecutor(registry, waiter, store)
+	executor := coordinator.NewExecutor(registry, waiter, store, eventBus)
 
 	// GC-SPEC-PDR-v4-Phase-3: Resume crashed plans in background
 	go func() {
