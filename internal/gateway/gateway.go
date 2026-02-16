@@ -86,6 +86,9 @@ type Config struct {
 	WasmHost interface {
 		MemoryStats() (uint32, map[string]uint32, uint32)
 	}
+
+	// GatewaySecurity holds authentication, rate limiting, CORS, and request size config (v0.5).
+	GatewaySecurity config.GatewaySecurityConfig
 }
 
 type Server struct {
@@ -96,6 +99,12 @@ type Server struct {
 
 	approvalsMu sync.Mutex
 	approvals   map[string]*approvalRequest
+
+	// Security middleware (v0.5).
+	auth           *AuthMiddleware
+	rateLimiter    *RateLimitMiddleware
+	corsConfig     config.CORSConfig
+	maxRequestSize int64
 }
 
 type client struct {
@@ -142,14 +151,26 @@ type rpcError struct {
 
 func New(cfg Config) *Server {
 	s := &Server{
-		cfg:       cfg,
-		clients:   map[*client]struct{}{},
-		approvals: map[string]*approvalRequest{},
+		cfg:            cfg,
+		clients:        map[*client]struct{}{},
+		approvals:      map[string]*approvalRequest{},
+		auth:           NewAuthMiddleware(cfg.GatewaySecurity.Auth),
+		rateLimiter:    NewRateLimitMiddleware(cfg.GatewaySecurity.RateLimit),
+		corsConfig:     cfg.GatewaySecurity.CORS,
+		maxRequestSize: cfg.GatewaySecurity.MaxRequestSize,
 	}
 	if cfg.ToolsUpdated != nil {
 		go s.consumeToolEvents(cfg.ToolsUpdated)
 	}
 	return s
+}
+
+// StartBackgroundTasks starts background maintenance goroutines (e.g., rate limiter eviction).
+// Call this after creating the server and before serving requests. Goroutines stop when ctx is cancelled.
+func (s *Server) StartBackgroundTasks(ctx context.Context) {
+	if s.rateLimiter != nil {
+		s.rateLimiter.StartEviction(ctx, 5*time.Minute, 10*time.Minute)
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -168,6 +189,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/plans", s.handleAPIPlansRoute)
 	mux.HandleFunc("/api/plans/", s.handleAPIPlansRoute)
 
+	// SSE streaming endpoint (v0.5)
+	mux.HandleFunc("/api/v1/task/stream", s.handleTaskStream)
+
 	// OpenAI-compatible endpoints
 	mux.HandleFunc("/v1/chat/completions", s.handleOpenAIChatCompletion)
 	mux.HandleFunc("/v1/models", s.handleOpenAIModels)
@@ -175,7 +199,25 @@ func (s *Server) Handler() http.Handler {
 	// A2A agent card endpoint
 	mux.HandleFunc("/.well-known/agent.json", s.handleAgentCard)
 
-	return mux
+	return s.buildHandler(mux)
+}
+
+// buildHandler wraps the mux with security middleware (v0.5).
+// Middleware is applied in reverse order: outermost (request size limit) runs first.
+func (s *Server) buildHandler(mux http.Handler) http.Handler {
+	handler := mux
+
+	// Apply middleware in reverse order (outermost first).
+	if s.rateLimiter != nil {
+		handler = s.rateLimiter.Wrap(handler)
+	}
+	if s.auth != nil {
+		handler = s.auth.Wrap(handler)
+	}
+	handler = NewCORSMiddleware(s.corsConfig)(handler)
+	handler = RequestSizeLimitMiddleware(s.maxRequestSize)(handler)
+
+	return handler
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {

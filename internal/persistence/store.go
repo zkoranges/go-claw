@@ -71,8 +71,12 @@ const (
 	schemaVersionV13  = 13
 	schemaChecksumV13 = "gc-v13-2026-02-16-async-delegation"
 
-	schemaVersionLatest  = schemaVersionV13
-	schemaChecksumLatest = schemaChecksumV13
+	// v0.5 schema v14: adds loop_checkpoints table for agent loop persistence (PDR v8 Phase 2).
+	schemaVersionV14  = 14
+	schemaChecksumV14 = "gc-v14-2026-02-16-loop-checkpoints"
+
+	schemaVersionLatest  = schemaVersionV14
+	schemaChecksumLatest = schemaChecksumV14
 
 	defaultLeaseDuration = 30 * time.Second
 
@@ -403,6 +407,8 @@ func (s *Store) initSchema(ctx context.Context) error {
 		{schemaVersionV10, schemaChecksumV10},
 		{schemaVersionV11, schemaChecksumV11},
 		{schemaVersionV12, schemaChecksumV12},
+		{schemaVersionV13, schemaChecksumV13},
+		{schemaVersionV14, schemaChecksumV14},
 	}
 	matched := false
 	for _, vc := range versionChecksums {
@@ -644,6 +650,22 @@ func (s *Store) initSchema(ctx context.Context) error {
 			UNIQUE(source_agent_id, target_agent_id, share_type, item_key)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_shares_target ON agent_shares(target_agent_id);`,
+		// v14: Loop checkpoints for agent loop persistence (PDR v8 Phase 2).
+		`CREATE TABLE IF NOT EXISTS loop_checkpoints (
+			loop_id      TEXT PRIMARY KEY,
+			task_id      TEXT NOT NULL,
+			agent_id     TEXT NOT NULL,
+			current_step INTEGER NOT NULL DEFAULT 0,
+			max_steps    INTEGER NOT NULL DEFAULT 0,
+			tokens_used  INTEGER NOT NULL DEFAULT 0,
+			max_tokens   INTEGER NOT NULL DEFAULT 0,
+			started_at   DATETIME NOT NULL,
+			max_duration INTEGER NOT NULL DEFAULT 0,
+			status       TEXT NOT NULL DEFAULT 'running',
+			messages     TEXT NOT NULL DEFAULT '[]',
+			created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 		// v9: Observability tables for metrics and activity logging.
 		`CREATE TABLE IF NOT EXISTS task_metrics (
 			task_id       TEXT PRIMARY KEY,
@@ -857,6 +879,9 @@ func (s *Store) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_plan_steps_execution ON plan_execution_steps(execution_id, step_index);`,
 		`CREATE INDEX IF NOT EXISTS idx_plan_steps_wave ON plan_execution_steps(execution_id, wave_number, status);`,
 		`CREATE INDEX IF NOT EXISTS idx_plan_steps_task ON plan_execution_steps(task_id);`,
+		// v14: Indexes for loop checkpoints
+		`CREATE INDEX IF NOT EXISTS idx_loop_checkpoints_task ON loop_checkpoints(task_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_loop_checkpoints_status ON loop_checkpoints(status);`,
 	}
 
 	for _, stmt := range indexStatements {
@@ -3357,6 +3382,11 @@ func (s *Store) DeleteAgent(ctx context.Context, agentID string) error {
 	// Clean up inter-agent messages to/from the deleted agent.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_messages WHERE from_agent = ? OR to_agent = ?;`, agentID, agentID); err != nil {
 		return fmt.Errorf("delete agent messages: %w", err)
+	}
+
+	// Clean up delegations involving the deleted agent.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM delegations WHERE parent_agent = ? OR child_agent = ?;`, agentID, agentID); err != nil {
+		return fmt.Errorf("delete agent delegations: %w", err)
 	}
 
 	// Cancel orphaned tasks (QUEUED or CLAIMED) belonging to the deleted agent.

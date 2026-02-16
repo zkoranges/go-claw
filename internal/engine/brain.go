@@ -28,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/plugins/anthropic"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // skillCacheKey is the context key for per-turn skill deduplication cache.
@@ -113,6 +114,21 @@ type GenkitBrain struct {
 	skillMu      sync.RWMutex
 	loadedSkills map[string]*skillEntry
 	wasmHost     *wasm.Host
+
+	// validator is set per-agent for structured output validation.
+	validator *StructuredValidator
+	// tracer provides OTel trace spans for brain operations.
+	tracer trace.Tracer
+}
+
+// SetValidator configures structured output validation for this brain.
+func (b *GenkitBrain) SetValidator(v *StructuredValidator) {
+	b.validator = v
+}
+
+// SetTracer configures the OTel tracer for brain operations.
+func (b *GenkitBrain) SetTracer(t trace.Tracer) {
+	b.tracer = t
 }
 
 // NewGenkitBrain initializes Genkit with the configured LLM provider.
@@ -381,6 +397,13 @@ func (b *GenkitBrain) Registry() *tools.Registry {
 // It loads session history, builds the message context, and calls Gemini
 // with registered tools available for autonomous use.
 func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (string, error) {
+	// OTel: trace the Respond call.
+	if b.tracer != nil {
+		var span trace.Span
+		ctx, span = b.tracer.Start(ctx, "brain.Respond")
+		defer span.End()
+	}
+
 	// Attach per-turn skill deduplication cache to context.
 	ctx, _ = withSkillCache(ctx)
 
@@ -471,7 +494,7 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 			})
 			// Touch each memory to update access stats (non-blocking)
 			go func(k string) {
-				_ = b.store.TouchMemory(ctx, agentID, k)
+				_ = b.store.TouchMemory(context.Background(), agentID, k)
 			}(m.Key)
 		}
 		coreBlock := memory.NewCoreMemoryBlock(kvs)
@@ -503,7 +526,7 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 	// Decay memories once per session start (factor 0.95 = 5% decay)
 	// Run async to not block response
 	go func() {
-		_ = b.store.DecayMemories(ctx, agentID, 0.95)
+		_ = b.store.DecayMemories(context.Background(), agentID, 0.95)
 	}()
 
 	// Escape % characters to prevent fmt.Sprintf corruption in ai.WithSystem().
@@ -578,12 +601,35 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 			slog.Warn("leak detector triggered on LLM output", "session_id", sessionID, "findings_count", len(findings))
 		}
 	}
+
+	// Structured output validation: if a validator is configured, validate and retry.
+	if b.validator != nil {
+		validJSON, _, valErr, err := ValidateAndRetry(ctx, b, sessionID, b.validator, reply)
+		if err != nil {
+			return "", fmt.Errorf("structured validation: %w", err)
+		}
+		if validJSON != "" {
+			return validJSON, nil
+		}
+		if valErr != "" {
+			slog.Warn("structured validation failed after retries", "session_id", sessionID, "error", valErr)
+		}
+		// Fall through with original reply if validation didn't produce valid JSON.
+	}
+
 	return reply, nil
 }
 
 // Stream generates an LLM response with streaming support.
 // The onChunk callback is invoked for each streaming chunk.
 func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onChunk func(content string) error) error {
+	// OTel: trace the Stream call.
+	if b.tracer != nil {
+		var span trace.Span
+		ctx, span = b.tracer.Start(ctx, "brain.Stream")
+		defer span.End()
+	}
+
 	// Attach per-turn skill deduplication cache to context.
 	ctx, _ = withSkillCache(ctx)
 

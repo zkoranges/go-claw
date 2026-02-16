@@ -78,14 +78,14 @@ func (pm *PinManager) AddTextPin(ctx context.Context, agentID, label, content st
 
 // StartFileWatcher polls pinned files for changes every N seconds.
 // When a file's mtime changes, re-read and update the stored content.
-func (pm *PinManager) StartFileWatcher(ctx context.Context) {
+func (pm *PinManager) StartFileWatcher(ctx context.Context, agentID string) {
 	go func() {
 		ticker := time.NewTicker(time.Duration(pm.pollSecs) * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				pm.refreshChangedFiles(ctx)
+				pm.refreshChangedFiles(ctx, agentID)
 			case <-pm.stop:
 				return
 			}
@@ -93,11 +93,18 @@ func (pm *PinManager) StartFileWatcher(ctx context.Context) {
 	}()
 }
 
-// refreshChangedFiles checks all file-type pins and re-reads if mtime changed.
-func (pm *PinManager) refreshChangedFiles(ctx context.Context) {
-	// This is a simplified implementation that would need agent context
-	// In a full implementation, would iterate through all agents
-	// For now, this method can be called per-agent as needed
+// refreshChangedFiles checks all file-type pins for the given agent and re-reads if mtime changed.
+func (pm *PinManager) refreshChangedFiles(ctx context.Context, agentID string) {
+	pins, err := pm.store.ListPins(ctx, agentID)
+	if err != nil {
+		return
+	}
+	for _, pin := range pins {
+		if pin.PinType != "file" {
+			continue
+		}
+		_, _ = pm.RefreshFilePin(ctx, agentID, pin.Source)
+	}
 }
 
 // Stop stops the file watcher.

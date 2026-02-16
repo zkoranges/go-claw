@@ -186,7 +186,9 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 					},
 				}
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(resp)
+				if err := json.NewEncoder(w).Encode(resp); err != nil {
+					slog.Warn("openai: failed to write response", "error", err)
+				}
 				return
 			}
 			if task.Status == "FAILED" || task.Status == "DEAD_LETTER" || task.Status == "CANCELED" {
@@ -223,7 +225,9 @@ func (s *Server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		Data:   models,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Warn("openai: failed to write models response", "error", err)
+	}
 }
 
 func (s *Server) openAIError(w http.ResponseWriter, status int, code, message string) {
@@ -236,5 +240,7 @@ func (s *Server) openAIError(w http.ResponseWriter, status int, code, message st
 			"code":    code,
 		},
 	}
-	_ = json.NewEncoder(w).Encode(errResp)
+	if err := json.NewEncoder(w).Encode(errResp); err != nil {
+		slog.Warn("openai: failed to write error response", "error", err)
+	}
 }

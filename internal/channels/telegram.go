@@ -28,8 +28,20 @@ type TelegramChannel struct {
 	pendingMu    sync.Mutex
 	pendingTasks map[string]int64 // taskID -> chatID
 
+	// streamMu protects streamMsgs for progressive editing.
+	streamMu   sync.Mutex
+	streamMsgs map[string]*streamState // taskID -> streaming state
+
 	// GC-SPEC-PDR-v7-Phase-3: Event subscriptions for plan execution
 	eventSubs []*bus.Subscription // Subscriptions to clean up on shutdown
+}
+
+// streamState tracks progressive editing for a streaming task.
+type streamState struct {
+	chatID    int64
+	messageID int
+	text      strings.Builder
+	lastEdit  time.Time
 }
 
 // NewTelegramChannel creates a new Telegram channel.
@@ -50,6 +62,7 @@ func NewTelegramChannel(token string, allowedIDs []int64, router engine.ChatTask
 		logger:       logger,
 		eventBus:     eb,
 		pendingTasks: make(map[string]int64),
+		streamMsgs:   make(map[string]*streamState),
 	}
 }
 
@@ -66,42 +79,97 @@ func (t *TelegramChannel) Start(ctx context.Context) error {
 
 	t.logger.Info("telegram bot started", "user", t.bot.Self.UserName)
 
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-
-	updates := t.bot.GetUpdatesChan(u)
-
 	// Monitor task completions to send replies via event bus or polling fallback.
 	go t.monitorCompletions(ctx)
+
+	// Reconnection loop with exponential backoff.
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+
+		u := tgbotapi.NewUpdate(0)
+		u.Timeout = 60
+		updates := t.bot.GetUpdatesChan(u)
+
+		pollErr := t.pollUpdates(ctx, updates)
+
+		// Always clean up the old polling goroutine before reconnecting.
+		t.bot.StopReceivingUpdates()
+
+		if pollErr != nil {
+			t.logger.Warn("telegram poll disconnected, reconnecting", "error", pollErr, "backoff", backoff)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+
+		// pollUpdates returned nil means ctx was cancelled.
+		return nil
+	}
+}
+
+// pollUpdates reads from the update channel until ctx is done, the channel
+// closes, or no updates arrive within 2x the long-poll timeout (stall detection).
+// Returns nil on context cancellation, or an error to trigger reconnection.
+func (t *TelegramChannel) pollUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel) error {
+	// tgbotapi uses a 60s long-poll timeout. If we see nothing for 2.5 minutes,
+	// the connection is likely dead (the library blocks rather than closing the channel).
+	const stallTimeout = 150 * time.Second
+
+	timer := time.NewTimer(stallTimeout)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case update := <-updates:
+		case update, ok := <-updates:
+			if !ok {
+				return fmt.Errorf("update channel closed")
+			}
+
+			// Reset stall timer on every received update (including empty long-poll returns).
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(stallTimeout)
+
 			// Handle text messages
 			if update.Message != nil {
-				// Security check
 				if _, ok := t.allowedIDs[update.Message.From.ID]; !ok {
 					t.logger.Warn("telegram access denied", "user_id", update.Message.From.ID, "user_name", update.Message.From.UserName)
 					continue
 				}
-
 				t.handleMessage(ctx, update.Message)
 				continue
 			}
 
 			// Handle inline button callbacks (HITL approvals)
 			if update.CallbackQuery != nil {
-				// Security check
 				if _, ok := t.allowedIDs[update.CallbackQuery.From.ID]; !ok {
 					t.logger.Warn("telegram callback access denied", "user_id", update.CallbackQuery.From.ID)
 					continue
 				}
-
 				t.handleCallbackQuery(ctx, update.CallbackQuery)
 				continue
 			}
+
+		case <-timer.C:
+			return fmt.Errorf("no updates received for %v (possible disconnect)", stallTimeout)
 		}
 	}
 }
@@ -179,6 +247,7 @@ func (t *TelegramChannel) handleCallbackQuery(ctx context.Context, query *tgbota
 
 func (t *TelegramChannel) monitorCompletions(ctx context.Context) {
 	if t.eventBus != nil {
+		go t.monitorStreamTokens(ctx)
 		t.monitorViaBus(ctx)
 		return
 	}
@@ -229,7 +298,20 @@ func (t *TelegramChannel) monitorViaBus(ctx context.Context) {
 						replyText = val
 					}
 				}
-				t.reply(chatID, replyText)
+
+				// If we were streaming this task, do a final edit instead of a new message.
+				t.streamMu.Lock()
+				state, wasStreaming := t.streamMsgs[taskID]
+				if wasStreaming {
+					delete(t.streamMsgs, taskID)
+				}
+				t.streamMu.Unlock()
+
+				if wasStreaming && state.messageID != 0 {
+					t.editMessageText(chatID, state.messageID, replyText)
+				} else {
+					t.reply(chatID, replyText)
+				}
 
 			case "task.failed":
 				task, err := t.store.GetTask(ctx, taskID)
@@ -312,6 +394,85 @@ func (t *TelegramChannel) reply(chatID int64, text string) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	if _, err := t.bot.Send(msg); err != nil {
 		t.logger.Error("failed to send telegram reply", "error", err)
+	}
+}
+
+// monitorStreamTokens subscribes to stream.token bus events and progressively
+// edits Telegram messages as tokens arrive from the LLM.
+func (t *TelegramChannel) monitorStreamTokens(ctx context.Context) {
+	sub := t.eventBus.Subscribe("stream.")
+	defer t.eventBus.Unsubscribe(sub)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-sub.Ch():
+			if ev.Topic != "stream.token" {
+				continue
+			}
+			payload, ok := ev.Payload.(map[string]string)
+			if !ok {
+				continue
+			}
+			taskID := payload["task_id"]
+			chunk := payload["chunk"]
+			if taskID == "" || chunk == "" {
+				continue
+			}
+
+			// Look up chat ID from pending tasks.
+			t.pendingMu.Lock()
+			chatID, pending := t.pendingTasks[taskID]
+			t.pendingMu.Unlock()
+			if !pending {
+				continue
+			}
+
+			t.streamMu.Lock()
+			state, exists := t.streamMsgs[taskID]
+			if !exists {
+				// First chunk: send a new placeholder message.
+				state = &streamState{chatID: chatID}
+				msg := tgbotapi.NewMessage(chatID, chunk)
+				sent, err := t.bot.Send(msg)
+				if err != nil {
+					t.logger.Warn("failed to send stream placeholder", "task_id", taskID, "error", err)
+					t.streamMu.Unlock()
+					continue
+				}
+				state.messageID = sent.MessageID
+				state.text.WriteString(chunk)
+				state.lastEdit = time.Now()
+				t.streamMsgs[taskID] = state
+				t.streamMu.Unlock()
+				continue
+			}
+
+			// Accumulate chunk text.
+			state.text.WriteString(chunk)
+
+			// Rate-limit edits to ~1/second to avoid Telegram 429 errors.
+			if time.Since(state.lastEdit) < time.Second {
+				t.streamMu.Unlock()
+				continue
+			}
+			text := state.text.String()
+			msgID := state.messageID
+			state.lastEdit = time.Now()
+			t.streamMu.Unlock()
+
+			t.editMessageText(chatID, msgID, text)
+		}
+	}
+}
+
+// editMessageText progressively updates an existing Telegram message.
+// Used for streaming responses — the message is edited in-place as tokens arrive.
+func (t *TelegramChannel) editMessageText(chatID int64, messageID int, text string) {
+	edit := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	if _, err := t.bot.Send(edit); err != nil {
+		t.logger.Warn("failed to edit telegram message (progressive)", "error", err)
 	}
 }
 

@@ -29,6 +29,7 @@ import (
 	"github.com/basket/go-claw/internal/engine"
 	"github.com/basket/go-claw/internal/gateway"
 	"github.com/basket/go-claw/internal/mcp"
+	otelPkg "github.com/basket/go-claw/internal/otel"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/basket/go-claw/internal/sandbox/wasm"
@@ -42,7 +43,7 @@ import (
 )
 
 // Version is set via ldflags at build time: -ldflags "-X main.Version=..."
-var Version = "v0.4-dev"
+var Version = "v0.5-dev"
 
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `Usage of %s:
@@ -201,6 +202,20 @@ func main() {
 
 	// Create event bus early so it can be passed to the store.
 	eventBus := bus.New()
+
+	// Initialize OpenTelemetry (no-op when disabled, zero overhead).
+	otelProvider, err := otelPkg.Init(ctx, otelPkg.Config{
+		Enabled:        cfg.Telemetry.Enabled,
+		Exporter:       cfg.Telemetry.Exporter,
+		Endpoint:       cfg.Telemetry.Endpoint,
+		ServiceName:    cfg.Telemetry.ServiceName,
+		SampleRate:     cfg.Telemetry.SampleRate,
+		MetricsEnabled: cfg.Telemetry.MetricsEnabled,
+	})
+	if err != nil {
+		fatalStartup(logger, "E_OTEL_INIT", err)
+	}
+	defer otelProvider.Shutdown(ctx)
 
 	dbPath := filepath.Join(cfg.HomeDir, "goclaw.db")
 	store, err := persistence.Open(dbPath, eventBus)
@@ -686,12 +701,14 @@ The system runs this checklist periodically to ensure health.
 			ra.Brain.Registry().ShellExecutor = shellSandbox
 		}
 
+		// Look up per-agent config entry (used for MCP, structured output, etc.).
+		agentCfg := findAgentConfig(cfg.Agents, ra.Config.AgentID)
+
 		// MCP tools (Phase 1.4 per-agent MCP).
 		if ra.Brain.Genkit() != nil {
 			agentID := ra.Config.AgentID
 
 			// Connect per-agent MCP servers from config (Phase 1.4).
-			agentCfg := findAgentConfig(cfg.Agents, agentID)
 			if agentCfg != nil && len(agentCfg.MCPServers) > 0 {
 				serverConfigs := make([]mcp.ServerConfig, 0, len(agentCfg.MCPServers))
 				for _, ref := range agentCfg.MCPServers {
@@ -717,6 +734,26 @@ The system runs this checklist periodically to ensure health.
 		// Delegation max hops from config.
 		if cfg.DelegationMaxHops > 0 {
 			ra.Brain.Registry().DelegationMaxHops = cfg.DelegationMaxHops
+		}
+
+		// Wire structured output validator if agent config specifies a schema (v0.5).
+		if agentCfg != nil && agentCfg.StructuredOutput != nil {
+			schema := agentCfg.StructuredOutput.Schema
+			if len(schema) == 0 && agentCfg.StructuredOutput.SchemaFile != "" {
+				if data, err := os.ReadFile(filepath.Join(cfg.HomeDir, agentCfg.StructuredOutput.SchemaFile)); err == nil {
+					schema = data
+				} else {
+					logger.Warn("failed to read structured output schema file", "agent_id", ra.Config.AgentID, "error", err)
+				}
+			}
+			if len(schema) > 0 {
+				v, err := engine.NewStructuredValidator(schema, agentCfg.StructuredOutput.MaxRetries, agentCfg.StructuredOutput.StrictMode)
+				if err != nil {
+					logger.Warn("failed to compile structured output schema", "agent_id", ra.Config.AgentID, "error", err)
+				} else {
+					ra.Brain.SetValidator(v)
+				}
+			}
 		}
 
 		logger.Info("runtime agent provisioned with skills/tools", "agent_id", ra.Config.AgentID)
@@ -974,6 +1011,8 @@ The system runs this checklist periodically to ensure health.
 		Executor:          executor,
 		WasmHost:          wasmHost,
 	})
+
+	gw.StartBackgroundTasks(ctx)
 
 	server := &http.Server{
 		Addr:    cfg.BindAddr,

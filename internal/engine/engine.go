@@ -15,6 +15,7 @@ import (
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/basket/go-claw/internal/shared"
 	"github.com/basket/go-claw/internal/tokenutil"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Config controls the engine's worker pool size, polling behavior, and agent scoping.
@@ -98,6 +99,14 @@ type Engine struct {
 
 	activeTasks atomic.Int32           // current in-flight task count
 	lastError   atomic.Pointer[string] // most recent error message
+
+	// tracer provides OTel trace spans for engine operations.
+	tracer trace.Tracer
+}
+
+// SetTracer configures the OTel tracer for engine operations.
+func (e *Engine) SetTracer(t trace.Tracer) {
+	e.tracer = t
 }
 
 func New(store *persistence.Store, proc Processor, cfg Config, pol ...policy.Checker) *Engine {
@@ -226,6 +235,13 @@ func (e *Engine) worker(ctx context.Context) {
 }
 
 func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
+	// OTel: trace the entire task processing lifecycle.
+	if e.tracer != nil {
+		var span trace.Span
+		ctx, span = e.tracer.Start(ctx, "engine.handleTask")
+		defer span.End()
+	}
+
 	// GC-SPEC-RUN-004: Propagate trace_id and run_id for this task's execution scope.
 	traceID := shared.NewTraceID()
 	runID := shared.NewRunID()
@@ -483,11 +499,18 @@ func (e *Engine) streamChatTask(ctx context.Context, agentID, sessionID, content
 	e.wg.Add(1)
 	defer e.wg.Done()
 
+	// bgCtx carries observability values (trace_id, run_id) but is not tied to
+	// task cancellation, matching the pattern in handleTask.
+	traceID := shared.NewTraceID()
+	runID := shared.NewRunID()
+	bgCtx := shared.WithTraceID(context.Background(), traceID)
+	bgCtx = shared.WithRunID(bgCtx, runID)
+
 	taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
 	defer cancel()
 
 	if e.proc == nil {
-		_, _ = e.store.HandleTaskFailure(context.Background(), taskID, "processor not initialized for streaming")
+		_, _ = e.store.HandleTaskFailure(bgCtx, taskID, "processor not initialized for streaming")
 		return taskID, fmt.Errorf("processor not initialized for streaming")
 	}
 
@@ -498,17 +521,37 @@ func (e *Engine) streamChatTask(ctx context.Context, agentID, sessionID, content
 	}
 
 	if brain == nil {
-		_, _ = e.store.HandleTaskFailure(context.Background(), taskID, "brain not available for streaming")
+		_, _ = e.store.HandleTaskFailure(bgCtx, taskID, "brain not available for streaming")
 		return taskID, fmt.Errorf("brain not available for streaming")
 	}
 
-	if err := brain.Stream(taskCtx, sessionID, content, onChunk); err != nil {
+	// Wrap the caller's onChunk to also publish stream.token events on the bus.
+	wrappedOnChunk := func(token string) error {
+		if e.bus != nil {
+			e.bus.Publish(bus.TopicStreamToken, bus.StreamTokenEvent{
+				TaskID:  taskID,
+				AgentID: agentID,
+				Token:   token,
+			})
+		}
+		return onChunk(token)
+	}
+
+	if err := brain.Stream(taskCtx, sessionID, content, wrappedOnChunk); err != nil {
 		slog.Error("streaming failed", "error", err)
-		_, _ = e.store.HandleTaskFailure(context.Background(), taskID, err.Error())
+		_, _ = e.store.HandleTaskFailure(bgCtx, taskID, err.Error())
 		return taskID, nil // task failure recorded; return taskID so caller can check status
 	}
 
-	_ = e.store.CompleteTask(context.Background(), taskID, `{"reply": "streamed"}`)
+	// Publish stream.done event on the bus.
+	if e.bus != nil {
+		e.bus.Publish(bus.TopicStreamDone, bus.StreamDoneEvent{
+			TaskID:  taskID,
+			AgentID: agentID,
+		})
+	}
+
+	_ = e.store.CompleteTask(bgCtx, taskID, `{"reply": "streamed"}`)
 	return taskID, nil
 }
 
