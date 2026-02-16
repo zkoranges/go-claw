@@ -519,6 +519,15 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 		}
 		return o
 	}
+
+	// Inject pending delegation results (Phase 2).
+	delegationMsgs, delegErr := b.injectPendingDelegations(ctx)
+	if delegErr != nil {
+		slog.Warn("failed to inject pending delegations", "agent_id", agentID, "error", delegErr)
+	} else if len(delegationMsgs) > 0 {
+		opts = append(opts, ai.WithMessages(delegationMsgs...))
+	}
+
 	opts = appendHistory(opts)
 
 	// Add tools for autonomous use
@@ -657,6 +666,14 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 		if msgs := historyToMessages(history); len(msgs) > 0 {
 			opts = append(opts, ai.WithMessages(msgs...))
 		}
+	}
+
+	// Inject pending delegation results (Phase 2).
+	delegationMsgs, delegErr := b.injectPendingDelegations(ctx)
+	if delegErr != nil {
+		slog.Warn("failed to inject pending delegations (stream)", "agent_id", agentID, "error", delegErr)
+	} else if len(delegationMsgs) > 0 {
+		opts = append(opts, ai.WithMessages(delegationMsgs...))
 	}
 
 	// Add tools (disable streaming for tool calls - fall back to non-streaming)

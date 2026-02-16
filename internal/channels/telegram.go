@@ -79,17 +79,29 @@ func (t *TelegramChannel) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case update := <-updates:
-			if update.Message == nil {
+			// Handle text messages
+			if update.Message != nil {
+				// Security check
+				if _, ok := t.allowedIDs[update.Message.From.ID]; !ok {
+					t.logger.Warn("telegram access denied", "user_id", update.Message.From.ID, "user_name", update.Message.From.UserName)
+					continue
+				}
+
+				t.handleMessage(ctx, update.Message)
 				continue
 			}
 
-			// Security check
-			if _, ok := t.allowedIDs[update.Message.From.ID]; !ok {
-				t.logger.Warn("telegram access denied", "user_id", update.Message.From.ID, "user_name", update.Message.From.UserName)
+			// Handle inline button callbacks (HITL approvals)
+			if update.CallbackQuery != nil {
+				// Security check
+				if _, ok := t.allowedIDs[update.CallbackQuery.From.ID]; !ok {
+					t.logger.Warn("telegram callback access denied", "user_id", update.CallbackQuery.From.ID)
+					continue
+				}
+
+				t.handleCallbackQuery(ctx, update.CallbackQuery)
 				continue
 			}
-
-			t.handleMessage(ctx, update.Message)
 		}
 	}
 }
@@ -136,6 +148,32 @@ func (t *TelegramChannel) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 	kvVal := fmt.Sprintf("%d", msg.Chat.ID)
 	if err := t.store.KVSet(ctx, kvKey, kvVal); err != nil {
 		t.logger.Warn("failed to map task to chat", "error", err)
+	}
+}
+
+// handleCallbackQuery handles inline button clicks from HITL approval messages.
+func (t *TelegramChannel) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQuery) {
+	// Parse the callback data (format: "hitl:requestID:action")
+	requestID, action, err := parseHITLCallback(query.Data)
+	if err != nil {
+		// Not a HITL callback, ignore
+		return
+	}
+
+	// Send notification to acknowledge button press
+	notification := tgbotapi.NewCallbackWithAlert(query.ID, fmt.Sprintf("Processing %s...", action))
+	if _, err := t.bot.Request(notification); err != nil {
+		t.logger.Warn("failed to send callback notification", "error", err)
+	}
+
+	// Publish approval response to event bus
+	if t.eventBus != nil {
+		response := bus.HITLApprovalResponse{
+			RequestID: requestID,
+			Action:    action, // "approve" or "reject"
+			Reason:    fmt.Sprintf("via Telegram (%s)", query.From.UserName),
+		}
+		t.eventBus.Publish(bus.TopicHITLApprovalResponse, response)
 	}
 }
 

@@ -42,7 +42,7 @@ import (
 )
 
 // Version is set via ldflags at build time: -ldflags "-X main.Version=..."
-var Version = "v0.3-dev"
+var Version = "v0.4-dev"
 
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `Usage of %s:
@@ -414,8 +414,28 @@ The system runs this checklist periodically to ensure health.
 	for _, ra := range registry.ListRunningAgents() {
 		if ra.Brain != nil && ra.Brain.Genkit() != nil {
 			agentID := ra.Config.AgentID
+
+			// Connect per-agent MCP servers from config (Phase 1.4).
+			agentCfg := findAgentConfig(cfg.Agents, agentID)
+			if agentCfg != nil && len(agentCfg.MCPServers) > 0 {
+				serverConfigs := make([]mcp.ServerConfig, 0, len(agentCfg.MCPServers))
+				for _, ref := range agentCfg.MCPServers {
+					serverConfigs = append(serverConfigs, mcp.ServerConfig{
+						Name:      ref.Name,
+						Command:   ref.Command,
+						Args:      ref.Args,
+						Env:       ref.Env,
+						Transport: ref.Transport,
+						URL:       ref.URL,
+						Timeout:   ref.Timeout,
+					})
+				}
+				if err := mcpManager.ConnectAgentServers(ctx, agentID, serverConfigs); err != nil {
+					logger.Warn("failed to connect per-agent MCP servers", "agent_id", agentID, "error", err)
+				}
+			}
+
 			// Register MCP tools for this agent via the new per-agent bridge.
-			// TODO: Phase 1.4 - resolve per-agent MCP configs and connect servers via mcpManager.ConnectAgentServers()
 			_ = tools.RegisterMCPTools(ra.Brain.Genkit(), agentID, mcpManager)
 		}
 		// Set delegation max hops from config.
@@ -669,8 +689,28 @@ The system runs this checklist periodically to ensure health.
 		// MCP tools (Phase 1.4 per-agent MCP).
 		if ra.Brain.Genkit() != nil {
 			agentID := ra.Config.AgentID
+
+			// Connect per-agent MCP servers from config (Phase 1.4).
+			agentCfg := findAgentConfig(cfg.Agents, agentID)
+			if agentCfg != nil && len(agentCfg.MCPServers) > 0 {
+				serverConfigs := make([]mcp.ServerConfig, 0, len(agentCfg.MCPServers))
+				for _, ref := range agentCfg.MCPServers {
+					serverConfigs = append(serverConfigs, mcp.ServerConfig{
+						Name:      ref.Name,
+						Command:   ref.Command,
+						Args:      ref.Args,
+						Env:       ref.Env,
+						Transport: ref.Transport,
+						URL:       ref.URL,
+						Timeout:   ref.Timeout,
+					})
+				}
+				if err := mcpManager.ConnectAgentServers(ctx, agentID, serverConfigs); err != nil {
+					logger.Warn("failed to connect per-agent MCP servers on hot-reload", "agent_id", agentID, "error", err)
+				}
+			}
+
 			// Register MCP tools for this agent via the new per-agent bridge.
-			// TODO: Phase 1.4 - resolve per-agent MCP configs and connect servers via mcpManager.ConnectAgentServers()
 			_ = tools.RegisterMCPTools(ra.Brain.Genkit(), agentID, mcpManager)
 		}
 
@@ -1418,4 +1458,14 @@ func printDaemonSubcommandUsage(w io.Writer) {
 	fmt.Fprintln(w, "       goclaw -daemon")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Runs GoClaw in daemon mode (no interactive chat TUI).")
+}
+
+// findAgentConfig finds an agent config by ID in the agents list.
+func findAgentConfig(agents []config.AgentConfigEntry, agentID string) *config.AgentConfigEntry {
+	for i := range agents {
+		if agents[i].AgentID == agentID {
+			return &agents[i]
+		}
+	}
+	return nil
 }
