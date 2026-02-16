@@ -42,7 +42,7 @@ import (
 )
 
 // Version is set via ldflags at build time: -ldflags "-X main.Version=..."
-var Version = "v0.2-dev"
+var Version = "v0.3-dev"
 
 func printUsage() {
 	fmt.Fprintf(os.Stderr, `Usage of %s:

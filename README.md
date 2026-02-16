@@ -11,7 +11,7 @@ GoClaw is a single-binary daemon that queues agent tasks in SQLite, executes the
 
 ```
 $ goclaw
-GoClaw v0.2-dev | SQLite WAL | 3 workers | localhost:18789
+GoClaw v0.3-dev | SQLite WAL | 3 workers | localhost:18789
 coder — gemini-2.5-pro
 > @coder implement a fibonacci function in Go
 [task queued] id=a1b2c3 status=QUEUED
@@ -33,6 +33,15 @@ Most agent frameworks treat task execution as ephemeral — if the process dies,
 - **@Mentions.** Route messages to specific agents with `@coder <msg>` syntax. Sticky agent switching with `@agent` shorthand.
 - **Starter agents.** Three built-in agents (coder, researcher, writer) available on first run. Create custom agents via Ctrl+N or pull from URLs with `goclaw pull`.
 - **Community agent library.** `goclaw pull <url>` fetches agent configs from any HTTPS URL, validates them, and adds to your local setup.
+
+### Context & Memory (v0.3)
+
+- **Conversation history.** Auto-compaction of old messages with LLM summarization. Token counts tracked and displayed via `/context`.
+- **Core memory.** Persistent facts stored per agent via `/remember <key> <value>` and `/memory` commands. Relevance decay over time.
+- **Pinned context.** Pin files or text snippets for ongoing use. File watcher detects changes and auto-updates pins. Useful for code, docs, and specs.
+- **Agent memory sharing.** `/share <memory> with <agent>` — broadcast memories to teammates. Wildcard shares (`/share all with @writer`) grant team-wide access.
+- **Executor retry with error context.** Failed plan steps automatically retry with the previous error injected as context. Agents see what broke and why.
+- **Context budget visibility.** `/context` command shows token allocation across soul, memory, pins, shared context, summaries, and messages. Know when you're running low.
 
 ### Safety and control
 

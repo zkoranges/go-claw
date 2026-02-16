@@ -128,6 +128,10 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		fmt.Fprintln(out, "    /pin text <label> <text>     Pin arbitrary text/notes")
 		fmt.Fprintln(out, "    /unpin <source>              Remove a pinned item")
 		fmt.Fprintln(out, "    /pinned                      List all pinned files for agent")
+		fmt.Fprintln(out, "    /context                     Show token budget and context allocation")
+		fmt.Fprintln(out, "    /share <key> with <agent>    Share a memory with another agent")
+		fmt.Fprintln(out, "    /unshare <key> from <agent>  Revoke memory sharing")
+		fmt.Fprintln(out, "    /shared                      List shared knowledge available to agent")
 		fmt.Fprintln(out, "    /clear                       Clear conversation history")
 		fmt.Fprintln(out, "    /quit                        Exit the chat")
 		fmt.Fprintln(out)
@@ -216,6 +220,9 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 
 	case "/shared":
 		handleSharedCommand(cc, out)
+
+	case "/context":
+		handleContextCommand(cc, out)
 
 	default:
 		fmt.Fprintf(out, "  Unknown command: %s (type /help for available commands)\n\n", cmd)
@@ -1329,5 +1336,119 @@ func handleSharedCommand(cc *ChatConfig, out io.Writer) {
 		}
 		fmt.Fprintf(out, "    • From @%s: %s\n", share.SourceAgentID, itemDesc)
 	}
+	fmt.Fprintln(out)
+}
+
+// handleContextCommand displays the token budget for the current agent.
+func handleContextCommand(cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	ctx := context.Background()
+	agentID := cc.CurrentAgent
+	if agentID == "" {
+		agentID = "default"
+	}
+
+	// Model limits (default to Gemini 2.5 Flash)
+	modelLimits := map[string]int{
+		"gemini-2.5-flash":  128000,
+		"gemini-2.5-pro":    128000,
+		"gemini-1.5-flash":  128000,
+		"gemini-1.5-pro":    128000,
+		"gpt-4-turbo":       128000,
+		"gpt-4":             8192,
+		"claude-opus":       200000,
+		"claude-sonnet":     200000,
+		"claude-haiku":      200000,
+	}
+	modelName := cc.ModelName
+	if modelName == "" {
+		modelName = "gemini-2.5-flash"
+	}
+
+	modelLimit := modelLimits[modelName]
+	if modelLimit == 0 {
+		modelLimit = 128000 // safe default
+	}
+	outputBuffer := 4096 // reserved for response
+
+	// Get actual data from store
+	memories, _ := cc.Store.ListMemories(ctx, agentID)
+	pins, _ := cc.Store.ListPins(ctx, agentID)
+
+	// Estimate token counts
+	soulTokens := 850 // typical system prompt
+	memoryTokens := 0
+	memoryCount := 0
+	for _, mem := range memories {
+		// Estimate tokens: (len(text) + 3) / 4
+		tokens := (len(mem.Value) + 3) / 4
+		memoryTokens += tokens
+		memoryCount++
+	}
+
+	pinTokens := 0
+	pinCount := 0
+	for _, pin := range pins {
+		pinTokens += pin.TokenCount
+		pinCount++
+	}
+
+	// Get shared context
+	sharedMemories, _ := cc.Store.GetSharedMemories(ctx, agentID)
+	sharedPins, _ := cc.Store.GetSharedPinsForAgent(ctx, agentID)
+	sharedTokens := 0
+	sharedMemCount := 0
+	sharedPinCount := 0
+	for _, mem := range sharedMemories {
+		tokens := (len(mem.Value) + 3) / 4
+		sharedTokens += tokens
+		sharedMemCount++
+	}
+	for _, pin := range sharedPins {
+		sharedTokens += pin.TokenCount
+		sharedPinCount++
+	}
+
+	// Estimate summary and message tokens (these would be computed during actual context building)
+	summaryTokens := 0
+	truncatedCount := 0
+	messageTokens := 200 // rough estimate for recent messages
+	messageCount := 5    // rough estimate
+
+	totalUsed := soulTokens + memoryTokens + pinTokens + sharedTokens + summaryTokens + messageTokens
+	available := modelLimit - outputBuffer
+	remaining := available - totalUsed
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	// Create and format budget
+	budget := &memory.ContextBudget{
+		ModelLimit:    modelLimit,
+		OutputBuffer:  outputBuffer,
+		Available:     available,
+		SoulTokens:    soulTokens,
+		MemoryTokens:  memoryTokens,
+		PinTokens:     pinTokens,
+		SharedTokens:  sharedTokens,
+		SummaryTokens: summaryTokens,
+		MessageTokens: messageTokens,
+		TotalUsed:     totalUsed,
+		Remaining:     remaining,
+		MessageCount:  messageCount,
+		TruncatedCount: truncatedCount,
+		PinCount:      pinCount,
+		SharedPinCount: sharedPinCount,
+		MemoryCount:   memoryCount,
+		SharedMemCount: sharedMemCount,
+	}
+
+	fmt.Fprintln(out)
+	fmt.Fprint(out, budget.Format(agentID, modelName))
 	fmt.Fprintln(out)
 }
