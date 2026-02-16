@@ -27,6 +27,9 @@ type TelegramChannel struct {
 
 	pendingMu    sync.Mutex
 	pendingTasks map[string]int64 // taskID -> chatID
+
+	// GC-SPEC-PDR-v7-Phase-3: Event subscriptions for plan execution
+	eventSubs []*bus.Subscription // Subscriptions to clean up on shutdown
 }
 
 // NewTelegramChannel creates a new Telegram channel.
@@ -272,4 +275,268 @@ func (t *TelegramChannel) reply(chatID int64, text string) {
 	if _, err := t.bot.Send(msg); err != nil {
 		t.logger.Error("failed to send telegram reply", "error", err)
 	}
+}
+
+// GC-SPEC-PDR-v7-Phase-3: Event subscription and handling methods
+
+// subscribeToEvents subscribes to plan execution and HITL events.
+// Called at startup to enable Telegram to receive and forward event notifications.
+func (t *TelegramChannel) subscribeToEvents() {
+	if t.eventBus == nil {
+		return
+	}
+
+	// Subscribe to plan step events
+	subs := []*bus.Subscription{
+		t.eventBus.Subscribe(bus.TopicPlanStepStarted),
+		t.eventBus.Subscribe(bus.TopicPlanStepCompleted),
+		t.eventBus.Subscribe(bus.TopicPlanStepFailed),
+		t.eventBus.Subscribe(bus.TopicHITLApprovalRequested),
+		t.eventBus.Subscribe(bus.TopicAgentAlert),
+	}
+
+	t.eventSubs = subs
+
+	// Start event handlers for each subscription
+	for _, sub := range subs {
+		sub := sub // Capture for closure
+		go func() {
+			for {
+				ev := <-sub.Ch()
+				if ev.Topic == "" {
+					// Channel closed on shutdown
+					return
+				}
+				t.handleEvent(&ev)
+			}
+		}()
+	}
+}
+
+// handleEvent dispatches events to appropriate handlers.
+func (t *TelegramChannel) handleEvent(ev *bus.Event) {
+	switch ev.Topic {
+	case bus.TopicPlanStepCompleted:
+		go t.onPlanStepCompleted(ev.Payload)
+	case bus.TopicPlanStepFailed:
+		go t.onPlanStepFailed(ev.Payload)
+	case bus.TopicHITLApprovalRequested:
+		go t.onHITLRequest(ev.Payload)
+	case bus.TopicAgentAlert:
+		go t.onAgentAlert(ev.Payload)
+	}
+}
+
+// onPlanStepCompleted handles completed plan step events.
+func (t *TelegramChannel) onPlanStepCompleted(data interface{}) {
+	stepEv, ok := data.(bus.PlanStepEvent)
+	if !ok {
+		t.logger.Warn("invalid PlanStepEvent payload", "type", fmt.Sprintf("%T", data))
+		return
+	}
+
+	// Format message with ✅ emoji
+	msg := fmt.Sprintf("✅ Step `%s` completed (execution: `%s`)",
+		escapeMarkdownV2(stepEv.StepID),
+		escapeMarkdownV2(stepEv.ExecutionID))
+
+	// Send to all allowed chats (in real usage, would track which chat owns this plan)
+	for chatID := range t.allowedIDs {
+		t.replyMarkdown(chatID, msg)
+	}
+}
+
+// onPlanStepFailed handles failed plan step events.
+func (t *TelegramChannel) onPlanStepFailed(data interface{}) {
+	stepEv, ok := data.(bus.PlanStepEvent)
+	if !ok {
+		t.logger.Warn("invalid PlanStepEvent payload", "type", fmt.Sprintf("%T", data))
+		return
+	}
+
+	// Format message with ❌ emoji
+	msg := fmt.Sprintf("❌ Step `%s` failed (execution: `%s`)",
+		escapeMarkdownV2(stepEv.StepID),
+		escapeMarkdownV2(stepEv.ExecutionID))
+
+	// Send to all allowed chats
+	for chatID := range t.allowedIDs {
+		t.replyMarkdown(chatID, msg)
+	}
+}
+
+// onHITLRequest handles human-in-the-loop approval requests.
+func (t *TelegramChannel) onHITLRequest(data interface{}) {
+	req, ok := data.(bus.HITLApprovalRequest)
+	if !ok {
+		t.logger.Warn("invalid HITLApprovalRequest payload", "type", fmt.Sprintf("%T", data))
+		return
+	}
+
+	// Create inline keyboard with Approve/Reject buttons
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(
+				"✅ Approve",
+				fmt.Sprintf("hitl:%s:approve", req.RequestID),
+			),
+			tgbotapi.NewInlineKeyboardButtonData(
+				"❌ Reject",
+				fmt.Sprintf("hitl:%s:reject", req.RequestID),
+			),
+		),
+	)
+
+	// Format message with step details
+	msg := fmt.Sprintf("🔓 *HITL Approval Required*\n\nStep: `%s`\n\nPrompt:\n```\n%s\n```",
+		escapeMarkdownV2(req.StepID),
+		escapeMarkdownV2(req.Prompt))
+
+	// Send to all allowed chats with keyboard
+	for chatID := range t.allowedIDs {
+		t.replyMarkdownWithKeyboard(chatID, msg, &keyboard)
+	}
+}
+
+// onAgentAlert handles agent alert notifications.
+func (t *TelegramChannel) onAgentAlert(data interface{}) {
+	alert, ok := data.(bus.AgentAlert)
+	if !ok {
+		t.logger.Warn("invalid AgentAlert payload", "type", fmt.Sprintf("%T", data))
+		return
+	}
+
+	// Map severity to emoji
+	emoji := "ℹ️"
+	switch alert.Severity {
+	case "warning":
+		emoji = "⚠️"
+	case "error":
+		emoji = "🚨"
+	}
+
+	// Format message
+	msg := fmt.Sprintf("%s *%s Alert*\n%s",
+		emoji,
+		escapeMarkdownV2(alert.Severity),
+		escapeMarkdownV2(alert.Message))
+
+	// Send to all allowed chats
+	for chatID := range t.allowedIDs {
+		t.replyMarkdown(chatID, msg)
+	}
+}
+
+// replyMarkdown sends a markdown-formatted message.
+func (t *TelegramChannel) replyMarkdown(chatID int64, text string) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "MarkdownV2"
+	if _, err := t.bot.Send(msg); err != nil {
+		t.logger.Error("failed to send telegram markdown reply", "error", err)
+	}
+}
+
+// replyMarkdownWithKeyboard sends a markdown-formatted message with inline keyboard.
+func (t *TelegramChannel) replyMarkdownWithKeyboard(chatID int64, text string, keyboard *tgbotapi.InlineKeyboardMarkup) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "MarkdownV2"
+	msg.ReplyMarkup = keyboard
+	if _, err := t.bot.Send(msg); err != nil {
+		t.logger.Error("failed to send telegram message with keyboard", "error", err)
+	}
+}
+
+// escapeMarkdownV2 escapes special characters for Telegram MarkdownV2.
+// Must escape: _ * [ ] ( ) ~ > # + - = | { } . !
+// GC-SPEC-PDR-v7-Phase-3: MarkdownV2 character escaping.
+func escapeMarkdownV2(s string) string {
+	// Characters that need escaping in MarkdownV2
+	specialChars := "_*[]()~>#+-=|{}.!"
+
+	result := make([]byte, 0, len(s)*2) // Pre-allocate for efficiency
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		// Check if character needs escaping
+		if strings.ContainsAny(string(c), specialChars) {
+			result = append(result, '\\')
+		}
+		result = append(result, c)
+	}
+
+	return string(result)
+}
+
+// formatPlanProgress formats plan execution progress as markdown.
+// Each step shown with status emoji.
+// GC-SPEC-PDR-v7-Phase-3: Plan progress formatting.
+func formatPlanProgress(planName string, steps []bus.PlanStepEvent) string {
+	if len(steps) == 0 {
+		return fmt.Sprintf("Plan `%s` in progress\\.\\.\\.\\.", escapeMarkdownV2(planName))
+	}
+
+	result := fmt.Sprintf("📋 Plan: `%s`\n\n", escapeMarkdownV2(planName))
+	for i, step := range steps {
+		result += fmt.Sprintf("%d\\. Step `%s` (agent: `%s`)\n",
+			i+1,
+			escapeMarkdownV2(step.StepID),
+			escapeMarkdownV2(step.AgentID))
+	}
+
+	return result
+}
+
+// parsePlanCommand parses a /plan command.
+// Format: /plan <planName> [input...]
+// GC-SPEC-PDR-v7-Phase-3: Plan command parsing.
+func parsePlanCommand(input string) (planName, planInput string, err error) {
+	input = strings.TrimSpace(input)
+	if !strings.HasPrefix(input, "/plan") {
+		return "", "", fmt.Errorf("not a plan command")
+	}
+
+	// Remove /plan prefix and trim
+	remaining := strings.TrimSpace(input[5:])
+	if remaining == "" {
+		return "", "", fmt.Errorf("plan name required")
+	}
+
+	// Split into plan name and optional input
+	parts := strings.SplitN(remaining, " ", 2)
+	planName = parts[0]
+
+	if len(parts) > 1 {
+		planInput = strings.TrimSpace(parts[1])
+	}
+
+	return planName, planInput, nil
+}
+
+// parseHITLCallback parses HITL callback data.
+// Format: hitl:requestID:action
+// GC-SPEC-PDR-v7-Phase-3: HITL callback parsing.
+func parseHITLCallback(data string) (requestID, action string, err error) {
+	data = strings.TrimSpace(data)
+
+	if !strings.HasPrefix(data, "hitl:") {
+		return "", "", fmt.Errorf("not a HITL callback")
+	}
+
+	// Remove hitl: prefix
+	remaining := data[5:]
+
+	// Split on : to get requestID and action
+	parts := strings.SplitN(remaining, ":", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid HITL callback format")
+	}
+
+	requestID = parts[0]
+	action = parts[1]
+
+	if requestID == "" || action == "" {
+		return "", "", fmt.Errorf("requestID and action required")
+	}
+
+	return requestID, action, nil
 }
