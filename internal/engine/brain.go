@@ -1110,3 +1110,71 @@ func (b *GenkitBrain) respondWithRandomSkill(ctx context.Context) (string, bool)
 	// Safe fallback if module export signature doesn't match expected ABI.
 	return fmt.Sprintf("Random number: %d (via random skill fallback)", rand.Int31n(1000)), true
 }
+
+// injectPendingDelegations retrieves pending delegations and returns them as system messages.
+// For delegations that have completed, returns the result as a message.
+// For delegations that failed, returns the error as a message.
+// Marks all retrieved delegations as injected to prevent double-injection.
+// PDR v7 Phase 2: Async delegation injection.
+func (b *GenkitBrain) injectPendingDelegations(ctx context.Context) ([]*ai.Message, error) {
+	if b.store == nil {
+		return nil, nil
+	}
+
+	agentID := shared.AgentID(ctx)
+	if agentID == "" {
+		return nil, nil
+	}
+
+	// Get pending delegations for this agent
+	delegations, err := b.store.PendingDelegationsForAgent(ctx, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("get pending delegations: %w", err)
+	}
+
+	if len(delegations) == 0 {
+		return nil, nil
+	}
+
+	var messages []*ai.Message
+
+	for _, d := range delegations {
+		var content string
+
+		switch d.Status {
+		case "completed":
+			if d.Result != nil {
+				content = fmt.Sprintf("[Delegation Complete] Agent %q completed the task:\n%s", d.ChildAgent, *d.Result)
+			} else {
+				content = fmt.Sprintf("[Delegation Complete] Agent %q completed the task with no output.", d.ChildAgent)
+			}
+
+		case "failed":
+			if d.ErrorMsg != nil {
+				content = fmt.Sprintf("[Delegation Failed] Agent %q failed with error:\n%s", d.ChildAgent, *d.ErrorMsg)
+			} else {
+				content = fmt.Sprintf("[Delegation Failed] Agent %q failed with no error message.", d.ChildAgent)
+			}
+
+		default:
+			// Should not happen, but handle gracefully
+			content = fmt.Sprintf("[Delegation Status: %s] Agent %q delegated task.", d.Status, d.ChildAgent)
+		}
+
+		messages = append(messages, &ai.Message{
+			Role:    ai.RoleSystem,
+			Content: []*ai.Part{ai.NewTextPart(content)},
+		})
+
+		// Mark as injected to prevent re-injection
+		if err := b.store.MarkDelegationInjected(ctx, d.ID); err != nil {
+			slog.Warn("failed to mark delegation as injected",
+				"delegation_id", d.ID,
+				"error", err,
+			)
+			// Don't fail the injection process if marking fails
+		}
+	}
+
+	return messages, nil
+}

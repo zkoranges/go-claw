@@ -86,6 +86,8 @@ func (r *Registry) RegisterAll(g *genkit.Genkit) {
 		r.Tools = append(r.Tools, spawnTool)
 		delegateTool := registerDelegate(g, r)
 		r.Tools = append(r.Tools, delegateTool)
+		delegateAsyncTool := registerDelegateAsync(g, r)
+		r.Tools = append(r.Tools, delegateAsyncTool)
 		msgTools := registerMessaging(g, r)
 		r.Tools = append(r.Tools, msgTools...)
 	}

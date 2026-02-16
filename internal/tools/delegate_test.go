@@ -198,3 +198,223 @@ func TestDelegateTask_ContextCancelAbortsChild(t *testing.T) {
 		t.Fatal("expected non-empty TaskID")
 	}
 }
+
+// === delegateTaskAsync tests (PDR v7 Phase 2) ===
+
+// Async delegation returns immediately with delegation ID.
+func TestDelegateTaskAsync_ReturnsImmediately(t *testing.T) {
+	store := openDelegateTestStore(t)
+	pol := delegateTestPolicy{allowCap: map[string]bool{capDelegateTaskAsync: true}}
+	registerTestAgent(t, store, "agent-b")
+
+	start := time.Now()
+	out, err := delegateTaskAsync(context.Background(), &AsyncDelegateTaskInput{
+		TargetAgent: "agent-b",
+		Prompt:      "hello",
+		SessionID:   delegateTestSession,
+	}, store, pol, 2)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.DelegationID == "" {
+		t.Fatal("expected non-empty DelegationID")
+	}
+	if out.Status != "queued" {
+		t.Fatalf("expected status=queued, got %q", out.Status)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("expected immediate return, took %v", elapsed)
+	}
+}
+
+// Async delegation creates delegation record in store.
+func TestDelegateTaskAsync_StoresDelegation(t *testing.T) {
+	store := openDelegateTestStore(t)
+	pol := delegateTestPolicy{allowCap: map[string]bool{capDelegateTaskAsync: true}}
+	registerTestAgent(t, store, "agent-b")
+	ctx := shared.WithAgentID(context.Background(), "agent-a")
+	registerTestAgent(t, store, "agent-a")
+
+	out, err := delegateTaskAsync(ctx, &AsyncDelegateTaskInput{
+		TargetAgent: "agent-b",
+		Prompt:      "process data",
+		SessionID:   delegateTestSession,
+	}, store, pol, 2)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify delegation was stored
+	deleg, err := store.GetDelegation(context.Background(), out.DelegationID)
+	if err != nil {
+		t.Fatalf("GetDelegation: %v", err)
+	}
+
+	if deleg.ParentAgent != "agent-a" {
+		t.Fatalf("expected parent_agent=agent-a, got %q", deleg.ParentAgent)
+	}
+	if deleg.ChildAgent != "agent-b" {
+		t.Fatalf("expected child_agent=agent-b, got %q", deleg.ChildAgent)
+	}
+	if deleg.Status != "queued" {
+		t.Fatalf("expected status=queued, got %q", deleg.Status)
+	}
+	if deleg.Prompt != "process data" {
+		t.Fatalf("expected prompt=process data, got %q", deleg.Prompt)
+	}
+}
+
+// Async delegation creates task in store.
+func TestDelegateTaskAsync_CreatesTask(t *testing.T) {
+	store := openDelegateTestStore(t)
+	pol := delegateTestPolicy{allowCap: map[string]bool{capDelegateTaskAsync: true}}
+	registerTestAgent(t, store, "agent-b")
+
+	out, err := delegateTaskAsync(context.Background(), &AsyncDelegateTaskInput{
+		TargetAgent: "agent-b",
+		Prompt:      "hello",
+		SessionID:   delegateTestSession,
+	}, store, pol, 2)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify delegation has task_id set
+	deleg, err := store.GetDelegation(context.Background(), out.DelegationID)
+	if err != nil {
+		t.Fatalf("GetDelegation: %v", err)
+	}
+
+	if deleg.TaskID == "" {
+		t.Fatal("expected delegation to have task_id")
+	}
+
+	// Verify task exists and is queued for agent-b
+	task, err := store.GetTask(context.Background(), deleg.TaskID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+
+	if task.AgentID != "agent-b" {
+		t.Fatalf("expected task AgentID=agent-b, got %q", task.AgentID)
+	}
+	if task.Status != "QUEUED" {
+		t.Fatalf("expected task Status=QUEUED, got %q", task.Status)
+	}
+}
+
+// Async delegation policy validation.
+func TestDelegateTaskAsync_PolicyDeny(t *testing.T) {
+	store := openDelegateTestStore(t)
+	pol := delegateTestPolicy{allowCap: map[string]bool{}} // no capability
+	registerTestAgent(t, store, "agent-b")
+
+	_, err := delegateTaskAsync(context.Background(), &AsyncDelegateTaskInput{
+		TargetAgent: "agent-b",
+		Prompt:      "hello",
+		SessionID:   delegateTestSession,
+	}, store, pol, 2)
+
+	if err == nil || !strings.Contains(err.Error(), "policy denied") {
+		t.Fatalf("expected policy denial, got err=%v", err)
+	}
+}
+
+// Async delegation rejects self-delegation.
+func TestDelegateTaskAsync_SelfDelegationBlocked(t *testing.T) {
+	store := openDelegateTestStore(t)
+	pol := delegateTestPolicy{allowCap: map[string]bool{capDelegateTaskAsync: true}}
+	registerTestAgent(t, store, "agent-a")
+
+	ctx := shared.WithAgentID(context.Background(), "agent-a")
+	_, err := delegateTaskAsync(ctx, &AsyncDelegateTaskInput{
+		TargetAgent: "agent-a",
+		Prompt:      "hello",
+		SessionID:   delegateTestSession,
+	}, store, pol, 2)
+
+	if err == nil || !strings.Contains(err.Error(), "cannot delegate to yourself") {
+		t.Fatalf("expected self-delegation rejection, got err=%v", err)
+	}
+}
+
+// Async delegation enforces hop limit.
+func TestDelegateTaskAsync_HopLimit(t *testing.T) {
+	store := openDelegateTestStore(t)
+	pol := delegateTestPolicy{allowCap: map[string]bool{capDelegateTaskAsync: true}}
+	registerTestAgent(t, store, "agent-b")
+
+	// Set hop count to max (will reject)
+	ctx := shared.WithDelegationHop(context.Background(), 2)
+	_, err := delegateTaskAsync(ctx, &AsyncDelegateTaskInput{
+		TargetAgent: "agent-b",
+		Prompt:      "hello",
+		SessionID:   delegateTestSession,
+	}, store, pol, 2)
+
+	if err == nil || !strings.Contains(err.Error(), "max delegation depth exceeded") {
+		t.Fatalf("expected hop limit exceeded, got err=%v", err)
+	}
+}
+
+// Async delegation input validation.
+func TestDelegateTaskAsync_InputValidation(t *testing.T) {
+	store := openDelegateTestStore(t)
+	pol := delegateTestPolicy{allowCap: map[string]bool{capDelegateTaskAsync: true}}
+
+	tests := []struct {
+		name  string
+		input AsyncDelegateTaskInput
+		want  string
+	}{
+		{"empty target", AsyncDelegateTaskInput{Prompt: "hi", SessionID: delegateTestSession}, "target_agent must be provided"},
+		{"empty prompt", AsyncDelegateTaskInput{TargetAgent: "b", SessionID: delegateTestSession}, "prompt must be non-empty"},
+		{"empty session", AsyncDelegateTaskInput{TargetAgent: "b", Prompt: "hi"}, "session_id must be non-empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := delegateTaskAsync(context.Background(), &tt.input, store, pol, 3)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q, got err=%v", tt.want, err)
+			}
+		})
+	}
+}
+
+// Async delegation links delegation to task via task_id.
+func TestDelegateTaskAsync_DelegationTaskLink(t *testing.T) {
+	store := openDelegateTestStore(t)
+	pol := delegateTestPolicy{allowCap: map[string]bool{capDelegateTaskAsync: true}}
+	registerTestAgent(t, store, "agent-b")
+
+	out, err := delegateTaskAsync(context.Background(), &AsyncDelegateTaskInput{
+		TargetAgent: "agent-b",
+		Prompt:      "hello",
+		SessionID:   delegateTestSession,
+	}, store, pol, 2)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Get delegation and verify task_id is set
+	deleg, err := store.GetDelegation(context.Background(), out.DelegationID)
+	if err != nil {
+		t.Fatalf("GetDelegation: %v", err)
+	}
+
+	// Verify we can retrieve by task_id
+	byTask, err := store.GetDelegationByTaskID(context.Background(), deleg.TaskID)
+	if err != nil {
+		t.Fatalf("GetDelegationByTaskID: %v", err)
+	}
+
+	if byTask.ID != out.DelegationID {
+		t.Fatalf("expected delegation ID %s, got %s", out.DelegationID, byTask.ID)
+	}
+}
