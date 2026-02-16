@@ -321,6 +321,18 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 		e.setLastError(err)
 		slog.Warn("task failed", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID, "run_id", runID, "agent_id", e.agentID, "error", err.Error())
 		_, _ = e.store.HandleTaskFailure(bgCtx, task.ID, err.Error())
+
+		// Update linked delegation if this task is part of an async delegation (PDR v7 Phase 2)
+		if deleg, delegErr := e.store.GetDelegationByTaskID(bgCtx, task.ID); delegErr == nil && deleg != nil {
+			if delegErr := e.store.FailDelegation(bgCtx, deleg.ID, err.Error()); delegErr != nil {
+				slog.Warn("failed to mark delegation as failed",
+					"delegation_id", deleg.ID,
+					"task_id", task.ID,
+					"error", delegErr,
+				)
+			}
+		}
+
 		e.publishEvent("task.failed", map[string]string{"task_id": task.ID, "session_id": task.SessionID})
 		return
 	}
@@ -330,6 +342,18 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 		slog.Error("failed to complete task", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID, "run_id", runID, "agent_id", e.agentID, "error", err)
 		return
 	}
+
+	// Update linked delegation if this task is part of an async delegation (PDR v7 Phase 2)
+	if deleg, err := e.store.GetDelegationByTaskID(bgCtx, task.ID); err == nil && deleg != nil {
+		if err := e.store.CompleteDelegation(bgCtx, deleg.ID, result); err != nil {
+			slog.Warn("failed to complete delegation",
+				"delegation_id", deleg.ID,
+				"task_id", task.ID,
+				"error", err,
+			)
+		}
+	}
+
 	slog.Info("task succeeded", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID, "run_id", runID, "agent_id", e.agentID)
 	e.publishEvent("task.succeeded", map[string]string{"task_id": task.ID, "session_id": task.SessionID})
 
