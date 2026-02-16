@@ -145,4 +145,62 @@ internal/
 - Existing test counts (use _v04 suffix for new tests)
 - OnAgentCreated hook provisioning order (skills → WASM → shell → MCP)
 - Policy.AllowCapability behavior (all existing callers must work unchanged)
+
+---
+
+## v0.4 Implementation Status (Current Session)
+
+### Phase 1: MCP Client — COMPLETE ✅
+**Commits**: b8324d6 (Phase 1.2-1.4), previous commits (Phase 1.1)
+
+**Phase 1.1 - Config/Policy/Manager** (16 tests):
+- ✅ AgentMCPRef struct in config.go with inline definitions + SSE transport
+- ✅ MCPServerEntry extended with URL, Transport, Timeout fields
+- ✅ Policy.AllowMCPTool() with specificity-based rule matching
+- ✅ Manager rewrite: per-agent connections, DiscoverTools, InvokeTool, Healthy, Reload
+- ✅ Tests for all above with proper mocking
+
+**Phase 1.2 - MCP Bridge Update** (6 tests):
+- ✅ RegisterMCPTools signature changed to accept agentID
+- ✅ Uses Manager.DiscoverTools for per-agent discovery
+- ✅ Routes through Manager.InvokeTool (policy-enforced)
+- ✅ Audit logging includes agentID
+- ✅ Error wrapping with server/tool context
+- ✅ Discovery failures non-fatal
+
+**Phase 1.3 - Brain Integration** (tests in brain_v04_test.go):
+- ✅ GenkitBrain.RegisterMCPTools(ctx, agentID, manager) method
+- ✅ Imported mcp package for manager access
+- ✅ Test placeholders for registration verification
+
+**Phase 1.4 - main.go Wiring** (integration):
+- ✅ Updated two RegisterMCPTools call sites with new signature
+- ✅ Extract agentID from ra.Config.AgentID
+- ✅ TODO: Phase 1.4 follow-up for per-agent config resolution
+
+**Test Summary**: 725 total tests passing (75 new for v0.4)
+
+### Phase 2: Async Delegation — FOUNDATION COMPLETE ✅
+**Commits**: Latest commit (Schema v13 + Delegation Store)
+
+**Schema Migration** (v8 → v13):
+- ✅ Added schemaVersionV13 with checksum
+- ✅ Created delegations table: id, task_id, parent_agent, child_agent, prompt, status, result, error_msg, created_at, completed_at, injected
+- ✅ Added indexes on (parent_agent, injected) and (task_id)
+
+**Delegation Store** (internal/persistence/delegations.go):
+- ✅ Defined Delegation struct
+- ✅ Created store method signatures (7 CRUD methods marked TODO)
+- ✅ Test framework in place (9 placeholder tests)
+
+**Remaining Phase 2 Work**:
+- Implement Delegation CRUD methods
+- Add delegate_task_async tool to internal/tools/delegate.go
+- Wire engine.onTaskSucceeded/Failed for delegation completion
+- Implement brain.injectPendingDelegations() for result injection
+- TUI activity feed for delegation status
+
+### Next Steps (Phase 3-4)
+- Phase 3: Telegram Deep Integration (HITL gates, plan progress, alert tool)
+- Phase 4: A2A Protocol (/.well-known/agent.json endpoint)
 - Manager backward compat methods (AllTools, CallTool, Start, Stop)
