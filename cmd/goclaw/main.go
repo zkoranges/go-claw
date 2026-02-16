@@ -410,13 +410,13 @@ The system runs this checklist periodically to ensure health.
 	}
 	defer func() { _ = mcpManager.Stop() }()
 
-	// Register MCP tools on all agents and set delegation config.
+	// Register MCP tools on all agents and set delegation config (Phase 1.4 per-agent MCP).
 	for _, ra := range registry.ListRunningAgents() {
 		if ra.Brain != nil && ra.Brain.Genkit() != nil {
-			mcpTools := tools.RegisterMCPTools(ra.Brain.Genkit(), ra.Brain.Registry(), mcpManager)
-			if len(mcpTools) > 0 {
-				ra.Brain.Registry().Tools = append(ra.Brain.Registry().Tools, mcpTools...)
-			}
+			agentID := ra.Config.AgentID
+			// Register MCP tools for this agent via the new per-agent bridge.
+			// TODO: Phase 1.4 - resolve per-agent MCP configs and connect servers via mcpManager.ConnectAgentServers()
+			_ = tools.RegisterMCPTools(ra.Brain.Genkit(), agentID, mcpManager)
 		}
 		// Set delegation max hops from config.
 		if ra.Brain != nil && cfg.DelegationMaxHops > 0 {
@@ -666,12 +666,12 @@ The system runs this checklist periodically to ensure health.
 			ra.Brain.Registry().ShellExecutor = shellSandbox
 		}
 
-		// MCP tools.
+		// MCP tools (Phase 1.4 per-agent MCP).
 		if ra.Brain.Genkit() != nil {
-			mcpTools := tools.RegisterMCPTools(ra.Brain.Genkit(), ra.Brain.Registry(), mcpManager)
-			if len(mcpTools) > 0 {
-				ra.Brain.Registry().Tools = append(ra.Brain.Registry().Tools, mcpTools...)
-			}
+			agentID := ra.Config.AgentID
+			// Register MCP tools for this agent via the new per-agent bridge.
+			// TODO: Phase 1.4 - resolve per-agent MCP configs and connect servers via mcpManager.ConnectAgentServers()
+			_ = tools.RegisterMCPTools(ra.Brain.Genkit(), agentID, mcpManager)
 		}
 
 		// Delegation max hops from config.

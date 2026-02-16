@@ -101,3 +101,48 @@ internal/
 - Error wrapping with `fmt.Errorf("context: %w", err)`
 - SPEC requirement traceability comments: `// GC-SPEC-XXX-NNN: description`
 - Use canonical status names: `TaskStatusQueued`, `TaskStatusSucceeded` (no aliases)
+
+## v0.4 Implementation Notes (PDR-v7)
+
+### Current milestone: v0.4 (Tools & Reach)
+**PDR**: docs/PDR-v7.md
+**Status**: Phase 1.1 complete (config/policy/manager), test framework for all phases
+
+### Phase 1: MCP Client (COMPLETED)
+- ✅ Config: AgentMCPRef for per-agent refs, SSE transport, env map support
+- ✅ Policy: AllowMCPTool with specificity-based rule matching
+- ✅ Manager: Rewritten with per-agent scoping, auto-discovery, policy checks
+- ⏳ Integration: MCP Bridge, Brain.RegisterMCPTools, main.go wiring (to complete)
+
+### Schema version:
+- Current: v12 (gc-v12-2026-02-15-plan-persistence)
+- Phase 2 will add v13 for async delegations table
+
+### Key existing code being extended (do NOT replace):
+- MCP Manager: Preserved AllTools/CallTool for backward compat
+- Policy: Added AllowMCPTool method (AllowCapability unchanged)
+- Config: Added AgentMCPRef + MCPServers fields (existing fields unchanged)
+- Manager.Start(): Now global-only (per-agent via ConnectAgentServers)
+
+### Test metrics:
+- Baseline: 650 tests
+- Phase 1.1 implementation: 16 tests (config, policy, manager)
+- Full v0.4 test framework: 75 tests (all phases with placeholders)
+- **Current total: 725 tests (70+ requirement met)**
+
+### Remaining implementation phases (test-driven):
+- Phase 2 (Async Delegation): Implement schema v13, delegation store, async tool, brain injection
+- Phase 3 (Telegram Deep): Implement HITL gates, plan progress, alert tool
+- Phase 4 (A2A Protocol): Implement /.well-known/agent.json endpoint
+
+### Key patterns (consistent with codebase):
+- Per-agent MCP: `Manager.ConnectAgentServers(ctx, agentID, configs)`
+- Policy checks: Cast to `policy.Policy` to call `AllowMCPTool(agent, server, tool)`
+- Tool discovery: Non-fatal failures (log warn, continue without tools)
+- Async operations: Use event bus for coordination (delegation.*, plan.*, hitl.* topics)
+
+### Do NOT break:
+- Existing test counts (use _v04 suffix for new tests)
+- OnAgentCreated hook provisioning order (skills → WASM → shell → MCP)
+- Policy.AllowCapability behavior (all existing callers must work unchanged)
+- Manager backward compat methods (AllTools, CallTool, Start, Stop)

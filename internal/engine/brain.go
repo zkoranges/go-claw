@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/basket/go-claw/internal/config"
+	"github.com/basket/go-claw/internal/mcp"
 	"github.com/basket/go-claw/internal/memory"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
@@ -832,6 +833,25 @@ func (b *GenkitBrain) ReplaceLoadedSkills(items []skills.LoadedSkill) {
 			Instructions:       "",
 		}
 	}
+}
+
+// RegisterMCPTools discovers and registers MCP tools for a specific agent.
+// Calls manager.DiscoverTools to get tools allowed by policy.
+// If discovery fails, logs a warning but continues (non-fatal).
+func (b *GenkitBrain) RegisterMCPTools(ctx context.Context, agentID string, manager interface{}) error {
+	// Import mcp package to use Manager type
+	var mgr *mcp.Manager
+	switch m := manager.(type) {
+	case *mcp.Manager:
+		mgr = m
+	default:
+		slog.Warn("invalid manager type for mcp tools", "agent", agentID)
+		return nil
+	}
+
+	refs := tools.RegisterMCPTools(b.g, agentID, mgr)
+	slog.Info("mcp tools registered for agent", "agent", agentID, "count", len(refs))
+	return nil
 }
 
 func (b *GenkitBrain) skillByName(name string) *skillEntry {
