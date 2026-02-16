@@ -254,9 +254,61 @@ func (e *Executor) executeWave(ctx context.Context, execID, sessionID string, st
 	// Wait for ALL tasks in this wave to complete
 	taskResults, err := e.waiter.WaitForAll(ctx, taskIDs, 5*time.Minute)
 
-	// Update step results from task results
+	// Update step results from task results and handle retries
+	stepMap := make(map[string]PlanStep)
+	for _, step := range steps {
+		stepMap[step.ID] = step
+	}
+
 	for taskID, tr := range taskResults {
 		stepID := taskToStep[taskID]
+		step := stepMap[stepID]
+
+		// Initialize max retries (default 2 if not specified)
+		maxRetries := step.MaxRetries
+		if maxRetries == 0 {
+			maxRetries = 2
+		}
+
+		// Check if step failed and should be retried
+		if tr.Status == "FAILED" {
+			currentResult := result.StepResults[stepID]
+			// Count retries from step result (initially 0)
+			retryCount := 0
+			if currentResult.TaskID != "" {
+				// Already has a result, this might be a retry
+				if strings.Contains(currentResult.TaskID, "-retry-") {
+					// Extract retry count from task ID or use error field
+					// For now, just check if we can retry
+				}
+			}
+
+			// If we can retry, create a new task with error context
+			if retryCount < maxRetries {
+				retryCount++
+				newTaskID, retryErr := RetryWithError(ctx, e.taskRouter, sessionID, step, tr.Error, retryCount+1)
+				if retryErr == nil {
+					// Wait for retry task to complete
+					retryResults, waitErr := e.waiter.WaitForAll(ctx, []string{newTaskID}, 5*time.Minute)
+					if waitErr == nil && len(retryResults) > 0 {
+						retryResult := retryResults[newTaskID]
+						// Use retry result if available
+						tr = retryResult
+
+						// Publish retry event
+						if e.store != nil && e.store.Bus() != nil {
+							e.store.Bus().Publish("plan.step.retry", map[string]interface{}{
+								"execution_id": execID,
+								"step_id":      stepID,
+								"attempt":      retryCount + 1,
+								"error":        tr.Error,
+							})
+						}
+					}
+				}
+			}
+		}
+
 		result.StepResults[stepID] = StepResult{
 			TaskID:     tr.TaskID,
 			Status:     tr.Status,
