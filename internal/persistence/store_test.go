@@ -81,8 +81,8 @@ func TestStore_MigrationLedgerHasChecksum(t *testing.T) {
 	if err := db.QueryRow(`SELECT version, checksum FROM schema_migrations ORDER BY version DESC LIMIT 1;`).Scan(&version, &checksum); err != nil {
 		t.Fatalf("query schema_migrations: %v", err)
 	}
-	if version != 12 {
-		t.Fatalf("expected version 12, got %d", version)
+	if version != 13 {
+		t.Fatalf("expected version 13, got %d", version)
 	}
 	if checksum == "" {
 		t.Fatalf("expected non-empty checksum")
@@ -123,7 +123,7 @@ func TestStore_OpenRejectsFutureSchemaVersion(t *testing.T) {
 
 func TestStore_OpenRejectsChecksumMismatch(t *testing.T) {
 	store, dbPath := openTestStore(t)
-	if _, err := store.DB().Exec(`UPDATE schema_migrations SET checksum='tampered' WHERE version=12;`); err != nil {
+	if _, err := store.DB().Exec(`UPDATE schema_migrations SET checksum='tampered' WHERE version=13;`); err != nil {
 		t.Fatalf("tamper checksum: %v", err)
 	}
 	if err := store.Close(); err != nil {
