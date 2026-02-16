@@ -13,11 +13,13 @@ type Plan struct {
 
 // PlanStep is a single step in a DAG plan.
 type PlanStep struct {
-	ID         string
-	AgentID    string
-	Prompt     string
-	DependsOn  []string // Step IDs that must complete before this step
-	MaxRetries int      // Max retry count on failure (default: 2)
+	ID                string
+	AgentID           string
+	Prompt            string
+	DependsOn         []string // Step IDs that must complete before this step
+	MaxRetries        int      // Max retry count on failure (default: 2)
+	RequireApproval   bool     // GC-SPEC-PDR-v7-Phase-3: HITL gate flag
+	ApprovalTimeoutMs int      // GC-SPEC-PDR-v7-Phase-3: HITL approval timeout in milliseconds
 }
 
 // StepResult is the outcome of a single step.

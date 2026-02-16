@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/google/uuid"
 )
@@ -19,10 +20,12 @@ type ChatTaskRouter interface {
 
 // Executor runs DAG plans with real completion tracking.
 // GC-SPEC-PDR-v4-Phase-3: Working DAG executor.
+// GC-SPEC-PDR-v7-Phase-3: HITL approval gates with event bus.
 type Executor struct {
 	taskRouter ChatTaskRouter
 	waiter     *Waiter
 	store      *persistence.Store
+	bus        *bus.Bus // GC-SPEC-PDR-v7-Phase-3: For HITL approval events
 }
 
 // NewExecutor creates a DAG executor with completion tracking.
@@ -344,6 +347,98 @@ func resolvePrompt(template string, result *ExecutionResult) string {
 		resolved = strings.ReplaceAll(resolved, placeholder, sr.Output)
 	}
 	return resolved
+}
+
+// executeStepWithApproval implements HITL approval gate for a step.
+// GC-SPEC-PDR-v7-Phase-3: Wait for human approval before continuing step execution.
+// Returns StepResult with approval status, or error if approval fails.
+func (e *Executor) executeStepWithApproval(ctx context.Context, execID, sessionID string, step PlanStep) (*StepResult, error) {
+	if !step.RequireApproval {
+		// No approval required, skip HITL gate
+		return nil, fmt.Errorf("step does not require approval")
+	}
+
+	// Generate request ID for matching response
+	requestID := uuid.New().String()
+
+	// Publish approval request
+	if e.bus != nil {
+		e.bus.Publish(bus.TopicHITLApprovalRequested, bus.HITLApprovalRequest{
+			RequestID:   requestID,
+			ExecutionID: execID,
+			StepID:      step.ID,
+			Prompt:      step.Prompt,
+			Timeout:     step.ApprovalTimeoutMs,
+		})
+	}
+
+	// Set up timeout context
+	timeout := time.Duration(step.ApprovalTimeoutMs) * time.Millisecond
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Wait for approval response
+	return e.waitForApproval(timeoutCtx, requestID, execID, step.ID)
+}
+
+// waitForApproval blocks until approval/rejection is received or timeout occurs.
+// GC-SPEC-PDR-v7-Phase-3: HITL approval response handler with timeout.
+func (e *Executor) waitForApproval(ctx context.Context, requestID, execID, stepID string) (*StepResult, error) {
+	if e.bus == nil {
+		// No bus - cannot wait for approval
+		return &StepResult{
+			Status: "WAITING_APPROVAL",
+			Error:  "event bus not available",
+		}, nil
+	}
+
+	// Subscribe to approval responses
+	sub := e.bus.Subscribe(bus.TopicHITLApprovalResponse)
+	defer e.bus.Unsubscribe(sub)
+
+	// Wait for response or timeout
+	for {
+		select {
+		case <-ctx.Done():
+			// Timeout - auto-reject
+			if e.bus != nil {
+				e.bus.Publish(bus.TopicHITLApprovalResponse, bus.HITLApprovalResponse{
+					RequestID: requestID,
+					Action:    "auto-reject",
+					Reason:    "approval timeout",
+				})
+			}
+			return &StepResult{
+				Status: "FAILED",
+				Error:  "approval timeout",
+			}, fmt.Errorf("approval timeout for step %s", stepID)
+
+		case event := <-sub.Ch():
+			// Check if this is our response
+			response, ok := event.Payload.(bus.HITLApprovalResponse)
+			if !ok {
+				continue
+			}
+
+			if response.RequestID != requestID {
+				continue // Not our response
+			}
+
+			// Handle response
+			if response.Action == "approve" {
+				return &StepResult{
+					Status: "APPROVED",
+					Output: "approval granted",
+				}, nil
+			} else if response.Action == "reject" {
+				return &StepResult{
+					Status: "FAILED",
+					Error:  fmt.Sprintf("approval rejected: %s", response.Reason),
+				}, fmt.Errorf("approval rejected: %s", response.Reason)
+			}
+			// Unknown action - ignore and continue waiting
+		}
+	}
 }
 
 // topoSort performs topological sort on plan steps and returns them grouped by wave.
