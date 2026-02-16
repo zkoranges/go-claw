@@ -208,6 +208,15 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 	case "/pinned":
 		handlePinnedCommand(cc, out)
 
+	case "/share":
+		handleShareCommand(arg, cc, out)
+
+	case "/unshare":
+		handleUnshareCommand(arg, cc, out)
+
+	case "/shared":
+		handleSharedCommand(cc, out)
+
 	default:
 		fmt.Fprintf(out, "  Unknown command: %s (type /help for available commands)\n\n", cmd)
 	}
@@ -1169,6 +1178,156 @@ func handlePinnedCommand(cc *ChatConfig, out io.Writer) {
 	fmt.Fprintf(out, "  Pinned context for @%s (%d items):\n", agentID, len(pins))
 	for _, pin := range pins {
 		fmt.Fprintf(out, "    • %s (%s) - %d tokens\n", pin.Source, pin.PinType, pin.TokenCount)
+	}
+	fmt.Fprintln(out)
+}
+
+// handleShareCommand processes /share commands.
+// Usage: /share <key> with <agent> — Share a specific memory
+//        /share all with <agent> — Share all memories
+//        /share pin <source> with <agent> — Share a specific pin
+func handleShareCommand(arg string, cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	ctx := context.Background()
+	sourceAgent := cc.CurrentAgent
+	if sourceAgent == "" {
+		sourceAgent = "default"
+	}
+
+	// Parse: <key|pin <source>|all> with <target>
+	parts := strings.Fields(arg)
+	if len(parts) < 3 {
+		fmt.Fprintf(out, "  Usage: /share <key|all|pin <source>> with <agent>\n")
+		fmt.Fprintf(out, "  Example: /share project with coder\n")
+		fmt.Fprintf(out, "           /share pin notes.md with writer\n\n")
+		return
+	}
+
+	var shareType, itemKey, targetAgent string
+
+	if parts[0] == "pin" {
+		// /share pin <source> with <target>
+		if len(parts) < 5 {
+			fmt.Fprintf(out, "  Usage: /share pin <source> with <agent>\n\n")
+			return
+		}
+		shareType = "pin"
+		itemKey = parts[1]
+		targetAgent = parts[3]
+	} else if parts[0] == "all" {
+		// /share all with <target>
+		if len(parts) < 3 {
+			fmt.Fprintf(out, "  Usage: /share all with <agent>\n\n")
+			return
+		}
+		shareType = "memory"
+		itemKey = ""
+		targetAgent = parts[2]
+	} else {
+		// /share <key> with <target>
+		shareType = "memory"
+		itemKey = parts[0]
+		targetAgent = parts[2]
+	}
+
+	err := cc.Store.AddShare(ctx, sourceAgent, targetAgent, shareType, itemKey)
+	if err != nil {
+		fmt.Fprintf(out, "  Error sharing: %v\n\n", err)
+		return
+	}
+
+	if itemKey != "" {
+		fmt.Fprintf(out, "  Shared %s '%s' with @%s\n\n", shareType, itemKey, targetAgent)
+	} else {
+		fmt.Fprintf(out, "  Shared all %ss with @%s\n\n", shareType, targetAgent)
+	}
+}
+
+// handleUnshareCommand processes /unshare commands.
+// Usage: /unshare <key> from <agent> — Revoke a specific memory share
+//        /unshare pin <source> from <agent> — Revoke a specific pin share
+func handleUnshareCommand(arg string, cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	ctx := context.Background()
+	sourceAgent := cc.CurrentAgent
+	if sourceAgent == "" {
+		sourceAgent = "default"
+	}
+
+	// Parse: <key|pin <source>> from <target>
+	parts := strings.Fields(arg)
+	if len(parts) < 3 {
+		fmt.Fprintf(out, "  Usage: /unshare <key|pin <source>> from <agent>\n\n")
+		return
+	}
+
+	var shareType, itemKey, targetAgent string
+
+	if parts[0] == "pin" {
+		if len(parts) < 4 {
+			fmt.Fprintf(out, "  Usage: /unshare pin <source> from <agent>\n\n")
+			return
+		}
+		shareType = "pin"
+		itemKey = parts[1]
+		targetAgent = parts[3]
+	} else {
+		shareType = "memory"
+		itemKey = parts[0]
+		targetAgent = parts[2]
+	}
+
+	err := cc.Store.RemoveShare(ctx, sourceAgent, targetAgent, shareType, itemKey)
+	if err != nil {
+		fmt.Fprintf(out, "  Error removing share: %v\n\n", err)
+		return
+	}
+
+	fmt.Fprintf(out, "  Revoked share of '%s' from @%s\n\n", itemKey, targetAgent)
+}
+
+// handleSharedCommand lists what's shared with the current agent.
+func handleSharedCommand(cc *ChatConfig, out io.Writer) {
+	if cc.Store == nil {
+		fmt.Fprintln(out, "  Store not available.")
+		fmt.Fprintln(out)
+		return
+	}
+
+	ctx := context.Background()
+	targetAgent := cc.CurrentAgent
+	if targetAgent == "" {
+		targetAgent = "default"
+	}
+
+	shares, err := cc.Store.ListSharesFor(ctx, targetAgent)
+	if err != nil {
+		fmt.Fprintf(out, "  Error listing shares: %v\n\n", err)
+		return
+	}
+
+	if len(shares) == 0 {
+		fmt.Fprintf(out, "  No shared knowledge available for @%s\n\n", targetAgent)
+		return
+	}
+
+	fmt.Fprintf(out, "  Shared knowledge for @%s (%d items):\n", targetAgent, len(shares))
+	for _, share := range shares {
+		itemDesc := fmt.Sprintf("all %ss", share.ShareType)
+		if share.ItemKey != "" {
+			itemDesc = fmt.Sprintf("%s '%s'", share.ShareType, share.ItemKey)
+		}
+		fmt.Fprintf(out, "    • From @%s: %s\n", share.SourceAgentID, itemDesc)
 	}
 	fmt.Fprintln(out)
 }

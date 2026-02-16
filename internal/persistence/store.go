@@ -611,6 +611,17 @@ func (s *Store) initSchema(ctx context.Context) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_pins_agent ON agent_pins(agent_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_pins_shared ON agent_pins(shared) WHERE shared = 1;`,
+		// v15: Agent shares for cross-agent knowledge access.
+		`CREATE TABLE IF NOT EXISTS agent_shares (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_agent_id TEXT NOT NULL,
+			target_agent_id TEXT NOT NULL,
+			share_type      TEXT NOT NULL,
+			item_key        TEXT DEFAULT '',
+			created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(source_agent_id, target_agent_id, share_type, item_key)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_shares_target ON agent_shares(target_agent_id);`,
 		// v9: Observability tables for metrics and activity logging.
 		`CREATE TABLE IF NOT EXISTS task_metrics (
 			task_id       TEXT PRIMARY KEY,
