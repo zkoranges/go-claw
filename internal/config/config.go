@@ -112,11 +112,26 @@ type ChannelsConfig struct {
 }
 
 type MCPServerConfig struct {
-	Name    string            `yaml:"name"`
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env"`
-	Enabled bool              `yaml:"enabled"`
+	Name      string            `yaml:"name"`
+	Command   string            `yaml:"command"`
+	Args      []string          `yaml:"args"`
+	Env       map[string]string `yaml:"env"`
+	URL       string            `yaml:"url,omitempty"`       // SSE endpoint (v0.4)
+	Transport string            `yaml:"transport,omitempty"` // "stdio" (default) or "sse" (v0.4)
+	Timeout   string            `yaml:"timeout,omitempty"`   // e.g. "30s" (v0.4)
+	Enabled   bool              `yaml:"enabled"`
+}
+
+// AgentMCPRef references an MCP server for per-agent use (v0.4).
+// Name references a global server by name. Command/URL/Transport define an inline server.
+type AgentMCPRef struct {
+	Name      string            `yaml:"name"`
+	Command   string            `yaml:"command,omitempty"`
+	Args      []string          `yaml:"args,omitempty"`
+	URL       string            `yaml:"url,omitempty"`
+	Transport string            `yaml:"transport,omitempty"`
+	Env       map[string]string `yaml:"env,omitempty"`
+	Timeout   string            `yaml:"timeout,omitempty"`
 }
 
 type MCPConfig struct {
@@ -125,19 +140,20 @@ type MCPConfig struct {
 
 // AgentConfigEntry defines a named agent to create on startup.
 type AgentConfigEntry struct {
-	AgentID            string   `yaml:"agent_id"`
-	DisplayName        string   `yaml:"display_name"`
-	Provider           string   `yaml:"provider"`
-	Model              string   `yaml:"model"`
-	APIKeyEnv          string   `yaml:"api_key_env"`
-	Soul               string   `yaml:"soul"`
-	SoulFile           string   `yaml:"soul_file"`
-	WorkerCount        int      `yaml:"worker_count"`
-	TaskTimeoutSeconds int      `yaml:"task_timeout_seconds"`
-	MaxQueueDepth      int      `yaml:"max_queue_depth"`
-	SkillsFilter       []string `yaml:"skills_filter"`
-	PreferredSearch    string   `yaml:"preferred_search"`
-	Capabilities       []string `yaml:"capabilities,omitempty"`
+	AgentID            string         `yaml:"agent_id"`
+	DisplayName        string         `yaml:"display_name"`
+	Provider           string         `yaml:"provider"`
+	Model              string         `yaml:"model"`
+	APIKeyEnv          string         `yaml:"api_key_env"`
+	Soul               string         `yaml:"soul"`
+	SoulFile           string         `yaml:"soul_file"`
+	WorkerCount        int            `yaml:"worker_count"`
+	TaskTimeoutSeconds int            `yaml:"task_timeout_seconds"`
+	MaxQueueDepth      int            `yaml:"max_queue_depth"`
+	SkillsFilter       []string       `yaml:"skills_filter"`
+	PreferredSearch    string         `yaml:"preferred_search"`
+	Capabilities       []string       `yaml:"capabilities,omitempty"`
+	MCPServers         []AgentMCPRef  `yaml:"mcp_servers,omitempty"` // Per-agent MCP servers (v0.4)
 }
 
 type Config struct {

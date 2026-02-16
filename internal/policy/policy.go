@@ -22,12 +22,26 @@ type Checker interface {
 	PolicyVersion() string
 }
 
+// MCPRule is a single MCP policy rule (v0.4).
+type MCPRule struct {
+	Agent  string   `yaml:"agent"`  // agent_id or "*"
+	Server string   `yaml:"server"` // server name or "*"
+	Tools  []string `yaml:"tools"`  // tool names or ["*"]
+}
+
+// MCPPolicyConfig holds MCP-specific policy rules (v0.4).
+type MCPPolicyConfig struct {
+	Default string    `yaml:"default"` // "deny" or "allow"
+	Rules   []MCPRule `yaml:"rules"`
+}
+
 // Policy is the serializable policy data.
 type Policy struct {
-	AllowDomains      []string `yaml:"allow_domains"`
-	AllowPaths        []string `yaml:"allow_paths"`
-	AllowCapabilities []string `yaml:"allow_capabilities"`
-	AllowLoopback     bool     `yaml:"allow_loopback"`
+	AllowDomains      []string       `yaml:"allow_domains"`
+	AllowPaths        []string       `yaml:"allow_paths"`
+	AllowCapabilities []string       `yaml:"allow_capabilities"`
+	AllowLoopback     bool           `yaml:"allow_loopback"`
+	MCP               MCPPolicyConfig `yaml:"mcp,omitempty"` // v0.4
 }
 
 func Default() Policy {
@@ -180,6 +194,94 @@ func (p Policy) AllowPath(path string) bool {
 		}
 	}
 	return false
+}
+
+// AllowMCPTool checks whether agent may invoke tool on an MCP server.
+// Specificity order (highest to lowest):
+//   1. Exact agent + exact server + exact tool
+//   2. Exact agent + exact server + wildcard tool
+//   3. Exact agent + wildcard server + wildcard tool
+//   4. Wildcard agent + exact server + exact tool
+//   ... etc (most-specific rule wins)
+// If no rule matches, falls back to default (default deny if unset).
+func (p Policy) AllowMCPTool(agentID, serverName, toolName string) bool {
+	// Default is deny unless explicitly set to "allow"
+	defaultAllow := strings.ToLower(strings.TrimSpace(p.MCP.Default)) == "allow"
+
+	agentID = strings.ToLower(strings.TrimSpace(agentID))
+	serverName = strings.ToLower(strings.TrimSpace(serverName))
+	toolName = strings.ToLower(strings.TrimSpace(toolName))
+
+	// Find the most-specific matching rule
+	var bestMatch *MCPRule
+	var bestScore int
+
+	for i := range p.MCP.Rules {
+		rule := &p.MCP.Rules[i]
+
+		ruleAgent := strings.ToLower(strings.TrimSpace(rule.Agent))
+		ruleServer := strings.ToLower(strings.TrimSpace(rule.Server))
+
+		// Calculate specificity score (higher = more specific)
+		score := 0
+
+		// Match agent
+		if ruleAgent == agentID {
+			score += 4 // Exact agent match
+		} else if ruleAgent == "*" {
+			score += 1 // Wildcard agent
+		} else {
+			continue // No match on agent dimension
+		}
+
+		// Match server
+		if ruleServer == serverName {
+			score += 2 // Exact server match
+		} else if ruleServer == "*" {
+			score += 0 // Wildcard server (adds no score)
+		} else {
+			continue // No match on server dimension
+		}
+
+		// Match tool
+		toolMatches := false
+		for _, t := range rule.Tools {
+			t = strings.ToLower(strings.TrimSpace(t))
+			if t == "*" || t == toolName {
+				toolMatches = true
+				break
+			}
+		}
+		if !toolMatches {
+			if len(rule.Tools) > 0 {
+				// Explicit tool list that doesn't match
+				continue
+			}
+			// Empty tool list means deny this combo
+		}
+
+		// This rule matches; is it more specific than what we've seen?
+		if bestMatch == nil || score > bestScore {
+			bestMatch = rule
+			bestScore = score
+		}
+	}
+
+	// Apply the best matching rule
+	if bestMatch != nil {
+		// Check if tool is in the allowed list
+		for _, t := range bestMatch.Tools {
+			t = strings.ToLower(strings.TrimSpace(t))
+			if t == "*" || t == toolName {
+				return true
+			}
+		}
+		// Rule matched but tool not in list → deny
+		return false
+	}
+
+	// No rule matched → apply default
+	return defaultAllow
 }
 
 func (p Policy) validate() error {

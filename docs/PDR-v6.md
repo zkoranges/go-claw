@@ -1,7 +1,7 @@
 # PDR v6: Context & Memory (v0.3)
 
 **Status**: READY FOR IMPLEMENTATION
-**Version**: 6.2 (revised)
+**Version**: 6.1 (revised — aligned with ROADMAP.md)
 **Date**: 2026-02-15
 **Depends on**: PDR v5 complete (v0.2 shipped)
 **Target**: go-claw v0.3-dev
@@ -75,7 +75,7 @@ Inspired by Letta/MemGPT's tiered model, adapted for GoClaw's local-first SQLite
 ┌─────────────────────────────────────────────┐
 │              SQLite (persistent)              │
 │                                              │
-│  messages         — full conversation log    │
+│  agent_messages   — full conversation log    │
 │  agent_memories   — key-value facts + score  │
 │  agent_pins       — pinned file references   │
 │  agent_summaries  — compressed history       │
@@ -172,7 +172,7 @@ grep -rn "MaxTokens\|max_tokens\|context.*window\|context.*length\|ContextSize" 
 grep -rn "type Tool\|RegisterTool\|ToolCall\|FunctionCall\|tool.*definition\|tools.*schema" internal/engine/*.go | head -20
 
 # Existing tool definitions
-grep -rn "func.*Tool\|"function"\|"tool"" internal/engine/*.go | head -20
+grep -rn "func.*Tool\|\"function\"\|\"tool\"" internal/engine/*.go | head -20
 
 # Does the engine support tool_use / function_calling?
 grep -rn "tool_use\|function_call\|ToolUse\|FunctionCall\|ToolChoice" internal/engine/*.go | head -20
@@ -207,10 +207,10 @@ grep -rn "type.*Event\|EventType\|const.*Event" internal/bus/*.go | head -20
 # === Plan Executor ===
 
 # How plans execute — error handling, step completion
-grep -B5 -A30 "func.*Execute\|func.*RunStep\|func.*executeWave\|func.*planStep" internal/coordinator/executor.go | head -60
+grep -B5 -A30 "func.*Execute\|func.*RunStep\|func.*executeWave\|func.*planStep" internal/engine/*.go | head -60
 
 # Task failure handling
-grep -rn "fail\|Fail\|error.*task\|TaskError\|StepError\|retry\|Retry" internal/coordinator/executor.go | head -20
+grep -rn "fail\|Fail\|error.*task\|TaskError\|StepError\|retry\|Retry" internal/engine/*.go | head -20
 
 # === Config Hot Reload ===
 
@@ -246,14 +246,25 @@ Record the output. ADAPT all code below to match actual patterns.
 
 ## Step 1.1: Create Messages Table
 
-Use existing `messages` table (schema v1). Add migration for `metadata` column:
+Add migration for `agent_messages` table:
 
 ```sql
-ALTER TABLE messages ADD COLUMN metadata TEXT DEFAULT '{}';
-CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(agent_id, created_at);
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id    TEXT    NOT NULL,
+    role        TEXT    NOT NULL,  -- 'user', 'assistant', 'system'
+    content     TEXT    NOT NULL,
+    token_count INTEGER DEFAULT 0,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    session_id  TEXT    DEFAULT '',
+    metadata    TEXT    DEFAULT '{}'  -- JSON for future extensibility
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_messages_agent_id ON agent_messages(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_created_at ON agent_messages(agent_id, created_at);
 ```
 
-**ADAPT**: Match existing migration pattern.
+**ADAPT**: Match existing migration pattern. If migrations use numbered files, create the next number. If inline, add to the schema init function.
 
 ```bash
 go build ./...
@@ -267,27 +278,27 @@ In `internal/persistence/messages.go`:
 // SaveMessage persists a chat message for an agent.
 // ADAPT: Match existing Store method patterns (context, error handling, tx usage)
 func (s *Store) SaveMessage(ctx context.Context, agentID, role, content string, tokenCount int) error {
-    // INSERT INTO messages ...
+    // INSERT INTO agent_messages ...
 }
 
 // LoadRecentMessages returns the last N messages for an agent, oldest first.
 func (s *Store) LoadRecentMessages(ctx context.Context, agentID string, limit int) ([]AgentMessage, error) {
-    // SELECT ... FROM messages ORDER BY created_at DESC LIMIT ? then reverse
+    // SELECT ... ORDER BY created_at DESC LIMIT ? then reverse
 }
 
 // LoadMessagesSince returns messages after a given timestamp for an agent.
 func (s *Store) LoadMessagesSince(ctx context.Context, agentID string, since time.Time) ([]AgentMessage, error) {
-    // SELECT ... FROM messages WHERE created_at > ? ORDER BY created_at ASC
+    // SELECT ... WHERE created_at > ? ORDER BY created_at ASC
 }
 
 // CountMessages returns total message count for an agent.
 func (s *Store) CountMessages(ctx context.Context, agentID string) (int, error) {
-    // SELECT COUNT(*) FROM messages ...
+    // SELECT COUNT(*) ...
 }
 
 // DeleteAgentMessages removes all messages for an agent. Used for /clear.
 func (s *Store) DeleteAgentMessages(ctx context.Context, agentID string) error {
-    // DELETE FROM messages WHERE agent_id = ?
+    // DELETE FROM agent_messages WHERE agent_id = ?
 }
 
 // AgentMessage represents a stored chat message.
@@ -571,9 +582,7 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, messages []WindowMessage)
     // Build a prompt like:
     // "Summarize this conversation in 2-3 sentences, preserving key facts,
     //  decisions, and action items. Be concise."
-    // + format messages as "User: ...
-Assistant: ...
-"
+    // + format messages as "User: ...\nAssistant: ...\n"
     // Call the LLM, return the summary string
 }
 
@@ -930,14 +939,14 @@ git add -A && git commit -m "PDR v6 Phase 3: agent memory with relevance scoring
 grep -B5 -A30 "type Tool\|RegisterTool\|ToolCall\|FunctionCall" internal/engine/*.go | head -80
 
 # How tools are defined
-grep -rn ""function"\|"type".*"function"\|tools.*=\|ToolDef" internal/engine/*.go | head -20
+grep -rn "\"function\"\|\"type\".*\"function\"\|tools.*=\|ToolDef" internal/engine/*.go | head -20
 
 # How tool results are returned to the model
 grep -B5 -A20 "tool_result\|ToolResult\|function_result\|FunctionResult" internal/engine/*.go | head -40
 
 # Existing tools
 ls internal/engine/tools*.go 2>/dev/null || echo "No tool files"
-grep -rn "Name.*:\|"name".*:" internal/engine/tools*.go 2>/dev/null | head -20
+grep -rn "Name.*:\|\"name\".*:" internal/engine/tools*.go 2>/dev/null | head -20
 ```
 
 ## Step 4.1: Define remember_fact Tool
@@ -1490,23 +1499,23 @@ git add -A && git commit -m "PDR v6 Phase 6: shared team knowledge"
 # PHASE 7: Executor Error-as-Input
 
 **Risk**: Medium
-**Files**: `internal/coordinator/executor.go`, `internal/coordinator/retry.go`, `internal/coordinator/retry_test.go`
+**Files**: engine executor, `internal/engine/retry.go`, `internal/engine/retry_test.go`
 **Goal**: When a plan step fails, feed error output back to the agent as a new message. Agent attempts to fix and retry. Configurable retry limit.
 
 ## Step 7.0: Pre-Flight
 
 ```bash
 # How does plan execution work?
-grep -B5 -A40 "func.*Execute\|func.*RunStep\|func.*executeWave\|func.*planStep" internal/coordinator/executor.go | head -100
+grep -B5 -A40 "func.*Execute\|func.*RunStep\|func.*executeWave\|func.*planStep" internal/engine/*.go | head -100
 
 # Current error handling in executor
-grep -B5 -A15 "fail\|Fail\|error\|Error\|StepResult\|StepStatus" internal/coordinator/executor.go | head -60
+grep -B5 -A15 "fail\|Fail\|error\|Error\|StepResult\|StepStatus" internal/engine/*.go | head -60
 
 # How does a step result get back to the plan?
-grep -B5 -A20 "StepResult\|StepComplete\|stepDone\|stepFinished" internal/coordinator/executor.go | head -40
+grep -B5 -A20 "StepResult\|StepComplete\|stepDone\|stepFinished" internal/engine/*.go | head -40
 
 # Existing retry config
-grep -rn "retry\|Retry\|MaxRetry\|max_retries\|RetryCount" internal/coordinator/*.go internal/config/config.go | head -10
+grep -rn "retry\|Retry\|MaxRetry\|max_retries\|RetryCount" internal/engine/*.go internal/config/config.go | head -10
 ```
 
 ## Step 7.1: Retry Configuration
@@ -1538,20 +1547,13 @@ plans:
 When a plan step fails, instead of immediately marking the plan as failed:
 
 ```go
-// internal/coordinator/retry.go
-package coordinator
+// internal/engine/retry.go
+package engine
 
 // RetryWithError re-runs a failed plan step, injecting the error as context.
 func RetryWithError(ctx context.Context, step PlanStep, previousError string, attempt int, brain Brain) (StepResult, error) {
     retryPrompt := fmt.Sprintf(
-        "Your previous attempt at this task failed.
-
-Original task: %s
-
-Error from attempt %d:
-%s
-
-Please analyze the error, fix your approach, and try again.",
+        "Your previous attempt at this task failed.\n\nOriginal task: %s\n\nError from attempt %d:\n%s\n\nPlease analyze the error, fix your approach, and try again.",
         step.Prompt,
         attempt,
         previousError,
@@ -1565,7 +1567,7 @@ Please analyze the error, fix your approach, and try again.",
 
 ```bash
 # Find the step execution loop
-grep -B10 -A30 "func.*executeStep\|func.*runStep\|for.*step\|range.*steps" internal/coordinator/executor.go | head -60
+grep -B10 -A30 "func.*executeStep\|func.*runStep\|for.*step\|range.*steps" internal/engine/*.go | head -60
 ```
 
 Modify the executor's step runner:
@@ -1602,7 +1604,7 @@ func executeStep(ctx context.Context, step PlanStep, brain Brain, bus EventBus) 
 
 ## Step 7.4: Test Error-as-Input
 
-In `internal/coordinator/retry_test.go`. Minimum 8 subtests:
+In `internal/engine/retry_test.go`. Minimum 8 subtests:
 - step succeeds first try — no retry
 - step fails then retry succeeds — returns success
 - step fails all retries — returns final error
@@ -1613,7 +1615,7 @@ In `internal/coordinator/retry_test.go`. Minimum 8 subtests:
 - StepRetryEvent published to bus on each retry
 
 ```bash
-go test ./internal/coordinator/ -run "Retry\|ErrorAsInput" -v -count=1
+go test ./internal/engine/ -run "Retry\|ErrorAsInput" -v -count=1
 ```
 
 ## GATE 7
@@ -1623,23 +1625,23 @@ just check || (go build ./... && go vet ./...)
 go test -race -count=1 ./...
 
 # Retry logic exists
-grep -q "func.*RetryWithError\|func.*retryWithError" internal/coordinator/retry.go && echo "PASS" || echo "FAIL"
+grep -q "func.*RetryWithError\|func.*retryWithError" internal/engine/retry.go && echo "PASS" || echo "FAIL"
 
 # MaxRetries field
-grep -q "MaxRetries\|max_retries" internal/coordinator/*.go && echo "PASS: config" || echo "FAIL"
+grep -q "MaxRetries\|max_retries" internal/engine/*.go && echo "PASS: config" || echo "FAIL"
 
 # Wired into executor (referenced outside retry.go and test files)
-grep -rl "RetryWithError\|retryWithError\|retryStep" internal/coordinator/*.go | grep -v retry.go | grep -v _test.go | grep -q . && echo "PASS: wired" || echo "FAIL"
+grep -rl "RetryWithError\|retryWithError\|retryStep" internal/engine/*.go | grep -v retry.go | grep -v _test.go | grep -q . && echo "PASS: wired" || echo "FAIL"
 
 # Bus event
-grep -q "StepRetry\|stepRetry\|RetryEvent" internal/coordinator/retry.go && echo "PASS: event" || echo "FAIL"
+grep -q "StepRetry\|stepRetry\|RetryEvent" internal/engine/retry.go && echo "PASS: event" || echo "FAIL"
 
 # Test count
-TC=$(grep -c "t.Run\|func Test" internal/coordinator/retry_test.go)
+TC=$(grep -c "t.Run\|func Test" internal/engine/retry_test.go)
 echo "Retry tests: $TC (need ≥8)"
 [ "$TC" -ge 8 ] && echo "PASS" || echo "FAIL"
 
-go test ./internal/coordinator/ -run "Retry\|ErrorAsInput" -v -count=1
+go test ./internal/engine/ -run "Retry\|ErrorAsInput" -v -count=1
 ```
 
 ```bash
@@ -1710,11 +1712,25 @@ Test in `internal/memory/budget_test.go`: 5 subtests.
 
 ## Step 8.3: Config Hot-Reload
 
-Ensure the existing `internal/config/watcher.go` handles agent registry updates without restart.
+When `config.yaml` changes on disk (e.g., after `goclaw pull`), reload without restart.
 
-1.  Verify `watcher.go` triggers a reload event on `config.yaml` write.
-2.  In `main.go`, ensure the reload handler calls `reconcileAgents` correctly (add/remove/update agents based on new config).
-3.  Ensure memory-related config (like window size if added) is updated on reload.
+```go
+// internal/config/watcher.go
+package config
+
+// Watcher monitors config.yaml for changes and triggers reload.
+// Uses polling (every 5s check mtime) — no fsnotify dependency.
+type Watcher struct {
+    path     string
+    lastMod  time.Time
+    onChange func(Config)
+    stop     chan struct{}
+}
+
+func NewWatcher(path string, onChange func(Config)) *Watcher { ... }
+func (w *Watcher) Start() { ... }  // starts background goroutine
+func (w *Watcher) Stop()  { ... }  // stops polling
+```
 
 Test in `internal/config/watcher_test.go`: 5 subtests:
 - detect file change triggers callback
@@ -1835,7 +1851,7 @@ go test ./internal/persistence/ -run "Share" -v -count=1
 go test ./internal/memory/ -run "Shared" -v -count=1
 
 echo "=== Phase 7: Error-as-Input ==="
-go test ./internal/coordinator/ -run "Retry|ErrorAsInput" -v -count=1
+go test ./internal/engine/ -run "Retry|ErrorAsInput" -v -count=1
 
 echo "=== Phase 8: Polish ==="
 go test ./internal/memory/ -run "Budget" -v -count=1
@@ -1900,7 +1916,7 @@ echo "Total test packages passing: $(go test ./... -count=1 2>&1 | grep '^ok' | 
 | 5 | memory | pins_test.go | 5 |
 | 6 | persistence | shares_test.go | 10 |
 | 6 | memory | shared_test.go | 4 |
-| 7 | coordinator | retry_test.go | 8 |
+| 7 | engine | retry_test.go | 8 |
 | 8 | memory | budget_test.go | 5 |
 | 8 | config | watcher_test.go | 5 |
 | **Total** | | | **≥109 new tests** |

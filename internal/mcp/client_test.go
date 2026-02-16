@@ -216,15 +216,11 @@ func TestReconnectableTransport_ImplementsTransport(t *testing.T) {
 }
 
 func TestServerHealth_Tracking(t *testing.T) {
-	// Verify health map is initialized and usable.
+	// Verify Healthy() method reports health status.
 	m := NewManager(nil, nil, nil)
-	if m.health == nil {
-		t.Fatal("health map should be initialized")
-	}
 
-	m.health["test"] = &serverHealth{healthy: true, lastCheck: time.Now()}
-	h, ok := m.health["test"]
-	if !ok || !h.healthy {
-		t.Fatal("expected healthy server entry")
+	// Unconnected server should report unhealthy
+	if m.Healthy("agent1", "unknown") {
+		t.Fatal("expected unhealthy for unconnected server")
 	}
 }
