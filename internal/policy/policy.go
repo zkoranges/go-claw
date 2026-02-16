@@ -66,6 +66,7 @@ var knownCapabilities = map[string]struct{}{
 	"tools.read_messages":    {},
 	"tools.memory_read":      {},
 	"tools.memory_write":     {},
+	"tools.send_alert":       {},
 	"wasm.http.get":          {},
 	"wasm.kv.set":            {},
 	"legacy.run":             {},
