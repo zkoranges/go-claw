@@ -1,8 +1,10 @@
 package persistence
 
-import "testing"
+import (
+	"testing"
+)
 
-// Async Delegation Persistence Tests (Phase 2)
+// Phase 2: Async Delegation Persistence Tests (PDR v7)
 
 func TestDelegation_Create(t *testing.T) {
 	t.Skip("CreateDelegation stores delegation record in Phase 2")
@@ -32,8 +34,8 @@ func TestDelegation_GetByTaskID(t *testing.T) {
 	t.Skip("GetDelegationByTaskID links task to delegation in Phase 2")
 }
 
-func TestSchema_MigrationV9(t *testing.T) {
-	t.Skip("schema v9 migration creates delegations table in Phase 2")
+func TestSchema_MigrationV13(t *testing.T) {
+	t.Skip("schema v13 migration creates delegations table in Phase 2")
 }
 
 func TestDelegation_SurvivesCrash(t *testing.T) {

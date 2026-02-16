@@ -67,8 +67,12 @@ const (
 	schemaVersionV12  = 12
 	schemaChecksumV12 = "gc-v12-2026-02-15-plan-persistence"
 
-	schemaVersionLatest  = schemaVersionV12
-	schemaChecksumLatest = schemaChecksumV12
+	// v0.4 schema v13: adds delegations table for async inter-agent delegation (PDR v7 Phase 2).
+	schemaVersionV13  = 13
+	schemaChecksumV13 = "gc-v13-2026-02-16-async-delegation"
+
+	schemaVersionLatest  = schemaVersionV13
+	schemaChecksumLatest = schemaChecksumV13
 
 	defaultLeaseDuration = 30 * time.Second
 
@@ -579,6 +583,24 @@ func (s *Store) initSchema(ctx context.Context) error {
 			read_at DATETIME,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
+		// v13: delegations table for async inter-agent delegation (PDR v7 Phase 2).
+		`CREATE TABLE IF NOT EXISTS delegations (
+			id            TEXT PRIMARY KEY,
+			task_id       TEXT,
+			parent_agent  TEXT NOT NULL,
+			child_agent   TEXT NOT NULL,
+			prompt        TEXT NOT NULL,
+			status        TEXT NOT NULL DEFAULT 'queued',
+			result        TEXT,
+			error_msg     TEXT,
+			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+			completed_at  DATETIME,
+			injected      INTEGER NOT NULL DEFAULT 0
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_deleg_parent_pending
+			ON delegations(parent_agent, injected) WHERE status IN ('completed','failed') AND injected = 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_deleg_task
+			ON delegations(task_id);`,
 		// v13: Agent memories with relevance scoring.
 		`CREATE TABLE IF NOT EXISTS agent_memories (
 			id              INTEGER PRIMARY KEY AUTOINCREMENT,
