@@ -219,8 +219,15 @@ type Config struct {
 	MCP      MCPConfig          `yaml:"mcp"`
 	Agents   []AgentConfigEntry `yaml:"agents"`
 	Plans    []PlanConfig       `yaml:"plans"` // GC-SPEC-PDR-v4-Phase-4: Plans for workflows
+	A2A      A2AConfig          `yaml:"a2a,omitempty"`
 
 	NeedsGenesis bool `yaml:"-"`
+}
+
+// A2AConfig controls A2A agent card exposure.
+// GC-SPEC-PDR-v7-Phase-4: A2A protocol configuration.
+type A2AConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"` // pointer to distinguish unset (default true) from false
 }
 
 // PlanConfig defines a named workflow in config.yaml.

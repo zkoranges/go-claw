@@ -172,6 +172,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/chat/completions", s.handleOpenAIChatCompletion)
 	mux.HandleFunc("/v1/models", s.handleOpenAIModels)
 
+	// A2A agent card endpoint
+	mux.HandleFunc("/.well-known/agent.json", s.handleAgentCard)
+
 	return mux
 }
 
