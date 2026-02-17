@@ -2,8 +2,10 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
@@ -50,6 +52,8 @@ type ChatConfig struct {
 	Switcher     AgentSwitcher // nil = single agent mode (backward compat)
 	CurrentAgent string
 	EventBus     *bus.Bus // nil = no plan event tracking
+	BindAddr     string   // gateway address for /plan execution
+	AuthToken    string   // auth token for gateway API calls
 }
 
 // RunChat runs an interactive chat UI on stdin/stdout.
@@ -187,9 +191,7 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		handleModelCommand(arg, cc, out)
 
 	case "/plan":
-		// GC-SPEC-PDR-v4-Phase-4: Plan system command.
-		fmt.Fprintln(out, "  /plan command: Plans loaded from config.yaml")
-		fmt.Fprintln(out)
+		handlePlanCommand(arg, cc, out)
 
 	case "/memory":
 		handleMemoryCommand(arg, cc, out)
@@ -229,6 +231,54 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 	}
 
 	return false
+}
+
+// handlePlanCommand executes a plan via the gateway REST API.
+func handlePlanCommand(arg string, cc *ChatConfig, out io.Writer) {
+	name := strings.TrimSpace(arg)
+	if name == "" {
+		fmt.Fprintln(out, "  Usage: /plan <name>")
+		fmt.Fprintln(out)
+		return
+	}
+	if cc.BindAddr == "" || cc.AuthToken == "" {
+		fmt.Fprintln(out, "  Plan execution not available (gateway not configured).")
+		fmt.Fprintln(out)
+		return
+	}
+
+	url := fmt.Sprintf("http://%s/api/plans/%s/execute", cc.BindAddr, name)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		fmt.Fprintf(out, "  Error: %s\n\n", err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+cc.AuthToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(out, "  Error: %s\n\n", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Fprintf(out, "  Error decoding response: %s\n\n", err)
+		return
+	}
+
+	if resp.StatusCode != http.StatusAccepted {
+		msg := "unknown error"
+		if e, ok := result["error"].(string); ok {
+			msg = e
+		}
+		fmt.Fprintf(out, "  Error: %s\n\n", msg)
+		return
+	}
+
+	execID, _ := result["execution_id"].(string)
+	fmt.Fprintf(out, "  Plan '%s' started (execution_id: %s)\n\n", name, execID)
 }
 
 // handleSkillsCommand processes /skills and /skills setup <name>.

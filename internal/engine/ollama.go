@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -42,11 +43,9 @@ func detectOllamaTools(baseURL, model string) bool {
 		return false
 	}
 
-	for _, cap := range result.Capabilities {
-		if cap == "tools" {
-			slog.Info("ollama model supports tools", "model", model)
-			return true
-		}
+	if slices.Contains(result.Capabilities, "tools") {
+		slog.Info("ollama model supports tools", "model", model)
+		return true
 	}
 	slog.Info("ollama model does not support tools", "model", model, "capabilities", result.Capabilities)
 	return false

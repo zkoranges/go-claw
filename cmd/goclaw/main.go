@@ -826,7 +826,7 @@ The system runs this checklist periodically to ensure health.
 
 				// Reconcile agents (add new, remove deleted, recreate changed ones).
 				// GC-SPEC-CFR-004: Agent hot-reload on config change.
-				reconcileAgents(ctx, registry, newCfg.Agents, cfg.Agents, cfg.HomeDir, logger)
+				reconcileAgents(ctx, registry, newCfg.Agents, cfg.Agents, &newCfg, logger)
 				cfg.Agents = newCfg.Agents
 
 				// Reload plans from updated config.
@@ -1187,6 +1187,8 @@ The system runs this checklist periodically to ensure health.
 				Switcher:     &tuiAgentSwitcher{reg: registry},
 				CurrentAgent: "default",
 				EventBus:     eventBus,
+				BindAddr:     cfg.BindAddr,
+				AuthToken:    authToken,
 			}); err != nil && ctx.Err() == nil {
 				logger.Error("chat exited with error", "error", err)
 			}
@@ -1218,7 +1220,7 @@ The system runs this checklist periodically to ensure health.
 
 // reconcileAgents reconciles the running agents with the new config.yaml agents section.
 func reconcileAgents(ctx context.Context, reg *agent.Registry,
-	newAgents, oldAgents []config.AgentConfigEntry, homeDir string, logger *slog.Logger) {
+	newAgents, oldAgents []config.AgentConfigEntry, globalCfg *config.Config, logger *slog.Logger) {
 	newMap := make(map[string]config.AgentConfigEntry)
 	for _, a := range newAgents {
 		newMap[a.AgentID] = a
@@ -1239,7 +1241,7 @@ func reconcileAgents(ctx context.Context, reg *agent.Registry,
 	// Add new agents.
 	for id, acfg := range newMap {
 		if _, existed := oldMap[id]; !existed {
-			if err := reg.CreateAgent(ctx, buildAgentConfig(acfg, homeDir)); err != nil {
+			if err := reg.CreateAgent(ctx, buildAgentConfig(acfg, globalCfg)); err != nil {
 				logger.Warn("failed to create agent during reconcile", "agent_id", id, "error", err)
 			}
 		}
@@ -1250,7 +1252,7 @@ func reconcileAgents(ctx context.Context, reg *agent.Registry,
 			if err := reg.RemoveAgent(ctx, id, 5*time.Second); err != nil {
 				logger.Warn("failed to remove changed agent during reconcile", "agent_id", id, "error", err)
 			}
-			if err := reg.CreateAgent(ctx, buildAgentConfig(acfg, homeDir)); err != nil {
+			if err := reg.CreateAgent(ctx, buildAgentConfig(acfg, globalCfg)); err != nil {
 				logger.Warn("failed to re-create changed agent during reconcile", "agent_id", id, "error", err)
 			}
 		}
@@ -1291,28 +1293,50 @@ func loadPlans(planConfigs []config.PlanConfig, agentIDs []string, logger *slog.
 	return summaries, plansMap
 }
 
-// buildAgentConfig constructs an agent.AgentConfig from config.AgentConfigEntry.
-func buildAgentConfig(acfg config.AgentConfigEntry, homeDir string) agent.AgentConfig {
+// buildAgentConfig constructs an agent.AgentConfig from config.AgentConfigEntry,
+// inheriting global LLM settings when the per-agent config doesn't override.
+func buildAgentConfig(acfg config.AgentConfigEntry, globalCfg *config.Config) agent.AgentConfig {
 	apiKey := os.Getenv(acfg.APIKeyEnv)
 	soul := acfg.Soul
 	if acfg.SoulFile != "" {
-		if data, err := os.ReadFile(filepath.Join(homeDir, acfg.SoulFile)); err == nil {
+		if data, err := os.ReadFile(filepath.Join(globalCfg.HomeDir, acfg.SoulFile)); err == nil {
 			soul = string(data)
 		}
 	}
+
+	// Inherit global LLM settings when per-agent config doesn't override.
+	provider, model, globalAPIKey := globalCfg.ResolveLLMConfig()
+	agentProvider := acfg.Provider
+	agentModel := acfg.Model
+	agentCompatProvider := ""
+	agentCompatBaseURL := ""
+	if agentProvider == "" {
+		agentProvider = provider
+		agentCompatProvider = globalCfg.LLM.OpenAICompatibleProvider
+		agentCompatBaseURL = globalCfg.LLM.OpenAICompatibleBaseURL
+	}
+	if agentModel == "" {
+		agentModel = model
+	}
+	if apiKey == "" {
+		apiKey = globalAPIKey
+	}
+
 	return agent.AgentConfig{
-		AgentID:            acfg.AgentID,
-		DisplayName:        acfg.DisplayName,
-		Provider:           acfg.Provider,
-		Model:              acfg.Model,
-		APIKey:             apiKey,
-		APIKeyEnv:          acfg.APIKeyEnv,
-		Soul:               soul,
-		WorkerCount:        acfg.WorkerCount,
-		TaskTimeoutSeconds: acfg.TaskTimeoutSeconds,
-		MaxQueueDepth:      acfg.MaxQueueDepth,
-		SkillsFilter:       acfg.SkillsFilter,
-		PreferredSearch:    acfg.PreferredSearch,
+		AgentID:              acfg.AgentID,
+		DisplayName:          acfg.DisplayName,
+		Provider:             agentProvider,
+		Model:                agentModel,
+		APIKey:               apiKey,
+		APIKeyEnv:            acfg.APIKeyEnv,
+		Soul:                 soul,
+		WorkerCount:          acfg.WorkerCount,
+		TaskTimeoutSeconds:   acfg.TaskTimeoutSeconds,
+		MaxQueueDepth:        acfg.MaxQueueDepth,
+		SkillsFilter:         acfg.SkillsFilter,
+		PreferredSearch:      acfg.PreferredSearch,
+		OpenAICompatProvider: agentCompatProvider,
+		OpenAICompatBaseURL:  agentCompatBaseURL,
 	}
 }
 

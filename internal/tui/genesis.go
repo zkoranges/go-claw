@@ -770,11 +770,9 @@ func (m genesisModel) generateConfig() string {
 		}
 		compatURL := strings.TrimSuffix(baseURL, "/") + "/v1"
 		b.WriteString("llm:\n")
-		b.WriteString("  provider: openai_compatible\n")
-		b.WriteString("  openai_compatible_provider: ollama\n")
+		b.WriteString("  provider: ollama\n")
 		b.WriteString(fmt.Sprintf("  openai_compatible_base_url: %s\n", compatURL))
-		b.WriteString(fmt.Sprintf("  openai_model: ollama/%s\n", model))
-		b.WriteString("gemini_api_key: \"ollama\"\n")
+		b.WriteString(fmt.Sprintf("  openai_model: %s\n", model))
 	} else {
 		b.WriteString(fmt.Sprintf("llm_provider: %s\n", provider))
 		b.WriteString(fmt.Sprintf("gemini_model: %s\n", model))

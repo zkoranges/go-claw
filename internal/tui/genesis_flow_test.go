@@ -406,14 +406,12 @@ func TestGenesisFlow_OllamaProvider(t *testing.T) {
 		t.Fatal("expected done=true with result and tea.Quit cmd")
 	}
 
-	// Verify generated config uses llm: section with openai_compatible.
+	// Verify generated config uses llm: section with provider: ollama.
 	cfg := m.result.Config
 	for _, expect := range []string{
-		"provider: openai_compatible",
-		"openai_compatible_provider: ollama",
+		"provider: ollama",
 		"openai_compatible_base_url: http://localhost:11434/v1",
-		"openai_model: ollama/",
-		"gemini_api_key: \"ollama\"",
+		"openai_model: ",
 	} {
 		if !strings.Contains(cfg, expect) {
 			t.Fatalf("config missing %q\nconfig=%s", expect, cfg)
@@ -422,6 +420,13 @@ func TestGenesisFlow_OllamaProvider(t *testing.T) {
 	// Should NOT contain the legacy flat provider field.
 	if strings.Contains(cfg, "llm_provider:") {
 		t.Fatalf("config should not contain llm_provider for Ollama\nconfig=%s", cfg)
+	}
+	// Should NOT contain the old openai_compatible shim fields.
+	if strings.Contains(cfg, "openai_compatible_provider:") {
+		t.Fatalf("config should not contain openai_compatible_provider for Ollama\nconfig=%s", cfg)
+	}
+	if strings.Contains(cfg, "gemini_api_key:") {
+		t.Fatalf("config should not contain gemini_api_key for Ollama\nconfig=%s", cfg)
 	}
 }
 

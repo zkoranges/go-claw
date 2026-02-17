@@ -341,6 +341,38 @@ func TestLoad_OpenRouterEnvPopulatesAPIKeys(t *testing.T) {
 	}
 }
 
+func TestResolveLLMConfig_Ollama(t *testing.T) {
+	cfg := config.Config{}
+	cfg.LLM.Provider = "ollama"
+	cfg.LLM.OpenAIModel = "llama3.1:8b"
+	provider, model, apiKey := cfg.ResolveLLMConfig()
+	if provider != "ollama" {
+		t.Fatalf("provider = %q, want ollama", provider)
+	}
+	if model != "llama3.1:8b" {
+		t.Fatalf("model = %q, want llama3.1:8b", model)
+	}
+	if apiKey != "ollama" {
+		t.Fatalf("apiKey = %q, want 'ollama' (placeholder)", apiKey)
+	}
+}
+
+func TestLLMProviderAPIKey_Ollama(t *testing.T) {
+	cfg := config.Config{}
+	got := cfg.LLMProviderAPIKey("ollama")
+	if got != "ollama" {
+		t.Fatalf("LLMProviderAPIKey(ollama) = %q, want 'ollama'", got)
+	}
+}
+
+func TestProviderAPIKey_Ollama(t *testing.T) {
+	cfg := config.Config{}
+	got := cfg.ProviderAPIKey("ollama")
+	if got != "ollama" {
+		t.Fatalf("ProviderAPIKey(ollama) = %q, want 'ollama'", got)
+	}
+}
+
 func TestLoad_PreferredSearchFromYAML(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	ic := filepath.Join(home, ".goclaw")

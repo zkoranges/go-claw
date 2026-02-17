@@ -866,3 +866,55 @@ Dedup test instructions.
 			out1["instructions"], out2["instructions"])
 	}
 }
+
+// --- Ollama provider tests ---
+
+func TestNewGenkitBrain_Ollama(t *testing.T) {
+	store := openStoreForBrainTest(t)
+	// No Ollama server running — should still create brain without panicking.
+	// toolsSupported should be false (can't reach server).
+	b := NewGenkitBrain(context.Background(), store, BrainConfig{
+		Provider: "ollama",
+		Model:    "llama3.1:8b",
+		Soul:     "You are a test assistant.",
+		Policy:   policy.Default(),
+	})
+	if b == nil {
+		t.Fatal("expected non-nil brain")
+	}
+	if !b.llmOn {
+		t.Fatal("expected llmOn=true for ollama (uses placeholder API key)")
+	}
+	if b.toolsSupported {
+		t.Fatal("expected toolsSupported=false (no Ollama server running)")
+	}
+}
+
+func TestNewGenkitBrain_ToolsSupportedDefault(t *testing.T) {
+	store := openStoreForBrainTest(t)
+	b := NewGenkitBrain(context.Background(), store, BrainConfig{
+		Provider: "google",
+		Policy:   policy.Default(),
+		Soul:     "test",
+	})
+	if !b.toolsSupported {
+		t.Fatal("non-ollama providers should default to toolsSupported=true")
+	}
+}
+
+func TestModelNameForProvider_Ollama(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{"llama3.1:8b", "ollama/llama3.1:8b"},
+		{"ollama/llama3.1:8b", "ollama/llama3.1:8b"},
+		{"qwen3:8b", "ollama/qwen3:8b"},
+	}
+	for _, tt := range tests {
+		got := modelNameForProvider("ollama", tt.model)
+		if got != tt.want {
+			t.Errorf("modelNameForProvider(ollama, %q) = %q, want %q", tt.model, got, tt.want)
+		}
+	}
+}

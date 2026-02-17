@@ -359,6 +359,7 @@ func (c Config) LLMProviderAPIKey(provider string) string {
 		"openai":            "OPENAI_API_KEY",
 		"openrouter":        "OPENROUTER_API_KEY",
 		"openai_compatible": "OPENAI_API_KEY",
+		"ollama":            "", // Ollama doesn't use env vars for API keys
 	}
 	if envVar, ok := envMap[provider]; ok {
 		if v := os.Getenv(envVar); v != "" {
@@ -373,6 +374,10 @@ func (c Config) LLMProviderAPIKey(provider string) string {
 	// Fallback to deprecated GeminiAPIKey for google and openai_compatible
 	if (provider == "google" || provider == "openai_compatible") && c.GeminiAPIKey != "" {
 		return c.GeminiAPIKey
+	}
+	// Ollama doesn't require a real API key; provide a placeholder.
+	if provider == "ollama" {
+		return "ollama"
 	}
 	return ""
 }
@@ -403,6 +408,10 @@ func (c Config) ResolveLLMConfig() (provider, model, apiKey string) {
 			model = c.LLM.OpenAIModel
 		}
 	case "openrouter":
+		if c.LLM.OpenAIModel != "" {
+			model = c.LLM.OpenAIModel
+		}
+	case "ollama":
 		if c.LLM.OpenAIModel != "" {
 			model = c.LLM.OpenAIModel
 		}
@@ -676,6 +685,9 @@ func (c Config) ProviderAPIKey(provider string) string {
 	// Legacy fallback for gemini.
 	if provider == "google" {
 		return c.GeminiAPIKey
+	}
+	if provider == "ollama" {
+		return "ollama"
 	}
 	return ""
 }

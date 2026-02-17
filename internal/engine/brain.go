@@ -119,6 +119,10 @@ type GenkitBrain struct {
 	validator *StructuredValidator
 	// tracer provides OTel trace spans for brain operations.
 	tracer trace.Tracer
+
+	// toolsSupported indicates whether the model supports tool/function calling.
+	// Defaults to true for all providers except "ollama" where it's auto-detected.
+	toolsSupported bool
 }
 
 // SetValidator configures structured output validation for this brain.
@@ -197,6 +201,24 @@ func NewGenkitBrain(ctx context.Context, store *persistence.Store, cfg BrainConf
 			slog.Warn("OpenAI compatible API key missing; using deterministic fallback")
 		}
 
+	case "ollama":
+		baseURL := cfg.OpenAICompatibleBaseURL
+		if baseURL == "" {
+			baseURL = "http://localhost:11434/v1"
+		}
+		ollamaKey := apiKey
+		if ollamaKey == "" {
+			ollamaKey = "ollama" // Ollama doesn't require auth; placeholder for Genkit
+		}
+		openaiCompatPlugin := &compat_oai.OpenAICompatible{
+			Provider: "ollama",
+			APIKey:   ollamaKey,
+			BaseURL:  baseURL,
+		}
+		g = genkit.Init(ctx, genkit.WithPlugins(openaiCompatPlugin))
+		llmOn = true
+		slog.Info("genkit brain initialized", "provider", "ollama", "model", modelID, "base_url", baseURL)
+
 	case "openrouter":
 		if apiKey != "" {
 			openrouterPlugin := &compat_oai.OpenAICompatible{
@@ -246,6 +268,17 @@ func NewGenkitBrain(ctx context.Context, store *persistence.Store, cfg BrainConf
 		leakDetector: safety.NewLeakDetector(),
 
 		loadedSkills: map[string]*skillEntry{},
+	}
+
+	brain.toolsSupported = true
+
+	// Auto-detect tool support for Ollama models.
+	if provider == "ollama" {
+		baseURL := cfg.OpenAICompatibleBaseURL
+		if baseURL == "" {
+			baseURL = "http://localhost:11434/v1"
+		}
+		brain.toolsSupported = detectOllamaTools(baseURL, modelID)
 	}
 
 	// Initialize compactor.
@@ -352,6 +385,8 @@ func envAPIKeyForProvider(provider string) string {
 		return os.Getenv("OPENAI_API_KEY")
 	case "openai_compatible":
 		return os.Getenv("OPENAI_API_KEY")
+	case "ollama":
+		return "" // Ollama doesn't require an API key
 	case "openrouter":
 		return os.Getenv("OPENROUTER_API_KEY")
 	case "google", "":
@@ -375,6 +410,11 @@ func modelNameForProvider(provider, model string) string {
 	case "openai":
 		return "openai/" + model
 	case "openai_compatible":
+		return model
+	case "ollama":
+		if !strings.HasPrefix(model, "ollama/") {
+			return "ollama/" + model
+		}
 		return model
 	case "openrouter":
 		return model // OpenRouter uses full model names like "anthropic/claude-sonnet-4-5-20250929"
@@ -553,8 +593,8 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 
 	opts = appendHistory(opts)
 
-	// Add tools for autonomous use
-	if len(b.tools.Tools) > 0 {
+	// Add tools for autonomous use (only if model supports them).
+	if b.toolsSupported && len(b.tools.Tools) > 0 {
 		opts = append(opts, ai.WithTools(b.tools.Tools...))
 		opts = append(opts, ai.WithMaxTurns(3))
 	}
@@ -572,9 +612,10 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 	if err != nil {
 		slog.Error("genkit generate failed", "error", err, "session_id", sessionID)
 		// If generation failed with tools, retry without tools as fallback
-		if len(b.tools.Tools) > 0 {
+		if b.toolsSupported && len(b.tools.Tools) > 0 {
 			slog.Info("retrying without tools")
 			fallbackOpts := appendHistory([]ai.GenerateOption{
+				ai.WithModelName(modelName),
 				ai.WithPrompt(trimmed),
 				ai.WithSystem(systemPrompt), // Reuse the same soul-injected prompt
 			})
@@ -722,8 +763,8 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 		opts = append(opts, ai.WithMessages(delegationMsgs...))
 	}
 
-	// Add tools (disable streaming for tool calls - fall back to non-streaming)
-	if len(b.tools.Tools) > 0 {
+	// Add tools for autonomous use (only if model supports them).
+	if b.toolsSupported && len(b.tools.Tools) > 0 {
 		opts = append(opts, ai.WithTools(b.tools.Tools...))
 		opts = append(opts, ai.WithMaxTurns(3))
 	}
@@ -738,9 +779,11 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 
 	var fullReply strings.Builder
 	var doneReply string
+	var streamErr error
 	for streamVal, err := range stream {
 		if err != nil {
-			return fmt.Errorf("stream error: %w", err)
+			streamErr = err
+			break
 		}
 		if streamVal.Chunk != nil {
 			for _, part := range streamVal.Chunk.Content {
@@ -755,6 +798,37 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 		if streamVal.Done && streamVal.Response != nil {
 			doneReply = streamVal.Response.Text()
 		}
+	}
+
+	// If streaming failed and tools were sent, retry without tools.
+	if streamErr != nil && b.toolsSupported && len(b.tools.Tools) > 0 {
+		slog.Info("stream failed with tools, retrying without tools", "error", streamErr)
+		retryOpts := []ai.GenerateOption{
+			ai.WithModelName(modelName),
+			ai.WithPrompt(trimmed),
+			ai.WithSystem(systemPrompt),
+		}
+		if len(history) > 0 {
+			if msgs := historyToMessages(history); len(msgs) > 0 {
+				retryOpts = append(retryOpts, ai.WithMessages(msgs...))
+			}
+		}
+		resp, retryErr := genkit.Generate(ctx, b.g, retryOpts...)
+		if retryErr != nil {
+			return fmt.Errorf("stream fallback: %w", retryErr)
+		}
+		reply := resp.Text()
+		if reply != "" {
+			if err := onChunk(reply); err != nil {
+				return err
+			}
+			if err := b.store.AddHistory(ctx, sessionID, agentID, "assistant", reply, tokenutil.EstimateTokens(reply)); err != nil {
+				slog.Warn("failed to save stream fallback response", "error", err)
+			}
+		}
+		return nil
+	} else if streamErr != nil {
+		return fmt.Errorf("stream error: %w", streamErr)
 	}
 
 	// Determine final reply: prefer accumulated chunks, fall back to Done response.
