@@ -7,7 +7,7 @@
 
 **Run AI agents locally with crash recovery, tool access, and zero cloud dependencies.**
 
-GoClaw is a single-binary daemon that queues agent tasks in SQLite, executes them through LLM providers (Gemini, Claude, GPT, OpenRouter), and guarantees nothing is silently lost — even if you `kill -9` the process mid-task. Orphaned work is automatically recovered on restart.
+GoClaw is a single-binary daemon that queues agent tasks in SQLite, executes them through LLM providers (Gemini, Claude, GPT, OpenRouter, Ollama), and guarantees nothing is silently lost — even if you `kill -9` the process mid-task. Orphaned work is automatically recovered on restart.
 
 ```
 $ goclaw
@@ -28,7 +28,7 @@ Most agent frameworks treat task execution as ephemeral — if the process dies,
 
 - **Durable task queue.** SQLite WAL with lease-based ownership. Tasks survive crashes. Orphaned work is automatically reclaimed on restart.
 - **8-state task machine.** QUEUED → CLAIMED → RUNNING → SUCCEEDED/FAILED/RETRY_WAIT/CANCELED → DEAD_LETTER. Every transition is transactional with an append-only audit trail.
-- **Multi-provider LLM brain.** Gemini (default), Anthropic, OpenAI, OpenRouter — with automatic failover. Tool calls are schema-validated before execution. Switch providers at runtime via `/model`.
+- **Multi-provider LLM brain.** Gemini (default), Anthropic, OpenAI, OpenRouter, Ollama — with automatic failover. Tool calls are schema-validated before execution. Ollama models auto-detect tool support via `/api/show`. Switch providers at runtime via `/model`.
 - **Context compaction.** When conversation history approaches the context window, older messages are summarized via LLM and archived. Recent messages stay intact.
 - **@Mentions.** Route messages to specific agents with `@coder <msg>` syntax. Sticky agent switching with `@agent` shorthand.
 - **Starter agents.** Three built-in agents (coder, researcher, writer) available on first run. Create custom agents via Ctrl+N or pull from URLs with `goclaw pull`.
@@ -42,6 +42,21 @@ Most agent frameworks treat task execution as ephemeral — if the process dies,
 - **Agent memory sharing.** `/share <memory> with <agent>` — broadcast memories to teammates. Wildcard shares (`/share all with @writer`) grant team-wide access.
 - **Executor retry with error context.** Failed plan steps automatically retry with the previous error injected as context. Agents see what broke and why.
 - **Context budget visibility.** `/context` command shows token allocation across soul, memory, pins, shared context, summaries, and messages. Know when you're running low.
+
+### Tools & Integration (v0.4)
+
+- **MCP client.** Per-agent MCP server connections (stdio + SSE transport) with policy-controlled tool discovery. Define servers per agent in `config.yaml`.
+- **Inter-agent delegation.** `delegate_task` tool for blocking task handoff between agents with hop counting, deadlock prevention, and capability-based routing.
+- **A2A protocol.** `GET /.well-known/agent.json` endpoint for agent-to-agent discovery and interoperability.
+- **Telegram deep integration.** Human-in-the-loop approval gates, plan progress updates, and alert tool for proactive notifications.
+
+### Streaming & Autonomy (v0.5)
+
+- **Streaming responses.** SSE endpoint (`/api/v1/task/stream`) for real-time token delivery. OpenAI-compatible streaming with tool-call deltas. Telegram progressive message editing during generation.
+- **Agent loops.** Autonomous iteration with configurable budgets (token, step, iteration), termination keywords, and crash-recovery checkpoints persisted to SQLite.
+- **Structured output.** JSON Schema validation with `extractJSON` for mixed LLM output and `ValidateAndRetry` for automatic re-prompting on schema violations.
+- **OpenTelemetry.** Traces and 10 metric instruments (histograms, counters, up-down counters) with configurable OTLP exporters. Zero overhead when disabled.
+- **Gateway security.** API key authentication (Bearer, X-API-Key, query param), per-key token bucket rate limiting, and configurable CORS. All disabled by default.
 
 ### Safety and control
 
@@ -91,6 +106,7 @@ Set an LLM API key:
 | Anthropic | `ANTHROPIC_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
+| Ollama (local) | None — runs locally on `localhost:11434` |
 
 ```bash
 export GEMINI_API_KEY="your-key"
