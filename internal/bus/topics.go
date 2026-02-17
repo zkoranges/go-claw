@@ -19,6 +19,19 @@ const (
 	TopicAgentAlert = "agent.alert"
 )
 
+// Agent message topic.
+const (
+	TopicAgentMessage = "agent.message"
+)
+
+// AgentMessageEvent is published when an agent sends a message to another agent.
+type AgentMessageEvent struct {
+	FromAgent string `json:"from_agent"`
+	ToAgent   string `json:"to_agent"`
+	Content   string `json:"content"`
+	Depth     int    `json:"depth"`
+}
+
 // PlanStepEvent is published when a plan step starts, completes, or fails.
 // GC-SPEC-PDR-v7-Phase-3: Step execution events.
 type PlanStepEvent struct {

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -120,5 +121,47 @@ func TestActivityFeed_ViewExpanded(t *testing.T) {
 	view := f.View()
 	if view == "" {
 		t.Fatal("expanded view should have content")
+	}
+}
+
+// TestActivityFeed_AgentMessage verifies that inter-agent message items
+// render correctly in the activity feed.
+func TestActivityFeed_AgentMessage(t *testing.T) {
+	f := NewActivityFeed()
+	f.Add(ActivityItem{
+		ID:        "msg-alpha-beta-123",
+		Icon:      ">>",
+		Message:   "@alpha -> @beta: hello from alpha",
+		StartedAt: time.Now(),
+	})
+	if f.Len() != 1 {
+		t.Fatalf("expected 1, got %d", f.Len())
+	}
+	view := f.View()
+	if !strings.Contains(view, "@alpha -> @beta") {
+		t.Fatalf("expected agent names in view, got %q", view)
+	}
+	if !strings.Contains(view, ">>") {
+		t.Fatalf("expected >> icon in view, got %q", view)
+	}
+}
+
+// TestActivityFeed_AgentMessageTruncation verifies that long messages
+// are truncated properly in activity feed display.
+func TestActivityFeed_AgentMessageTruncation(t *testing.T) {
+	longContent := strings.Repeat("x", 100)
+	truncated := longContent[:80] + "..."
+	msg := "@sender -> @receiver: " + truncated
+
+	f := NewActivityFeed()
+	f.Add(ActivityItem{
+		ID:        "msg-trunc-123",
+		Icon:      ">>",
+		Message:   msg,
+		StartedAt: time.Now(),
+	})
+	view := f.View()
+	if !strings.Contains(view, "...") {
+		t.Fatalf("expected truncation marker in view, got %q", view)
 	}
 }

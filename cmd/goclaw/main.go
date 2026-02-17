@@ -350,19 +350,38 @@ The system runs this checklist periodically to ensure health.
 				logger.Warn("failed to read agent soul_file, using inline soul", "agent_id", acfg.AgentID, "soul_file", acfg.SoulFile, "error", err)
 			}
 		}
+		// Inherit global LLM settings when per-agent config doesn't override.
+		agentProvider := acfg.Provider
+		agentModel := acfg.Model
+		agentAPIKey := apiKey
+		agentCompatProvider := ""
+		agentCompatBaseURL := ""
+		if agentProvider == "" {
+			agentProvider = llmProvider
+			agentCompatProvider = cfg.LLM.OpenAICompatibleProvider
+			agentCompatBaseURL = cfg.LLM.OpenAICompatibleBaseURL
+		}
+		if agentModel == "" {
+			agentModel = llmModel
+		}
+		if agentAPIKey == "" {
+			agentAPIKey = llmAPIKey
+		}
 		if err := registry.CreateAgent(ctx, agent.AgentConfig{
-			AgentID:            acfg.AgentID,
-			DisplayName:        acfg.DisplayName,
-			Provider:           acfg.Provider,
-			Model:              acfg.Model,
-			APIKey:             apiKey,
-			APIKeyEnv:          acfg.APIKeyEnv,
-			Soul:               soul,
-			WorkerCount:        acfg.WorkerCount,
-			TaskTimeoutSeconds: acfg.TaskTimeoutSeconds,
-			MaxQueueDepth:      acfg.MaxQueueDepth,
-			SkillsFilter:       acfg.SkillsFilter,
-			PreferredSearch:    acfg.PreferredSearch,
+			AgentID:              acfg.AgentID,
+			DisplayName:          acfg.DisplayName,
+			Provider:             agentProvider,
+			Model:                agentModel,
+			APIKey:               agentAPIKey,
+			APIKeyEnv:            acfg.APIKeyEnv,
+			Soul:                 soul,
+			WorkerCount:          acfg.WorkerCount,
+			TaskTimeoutSeconds:   acfg.TaskTimeoutSeconds,
+			MaxQueueDepth:        acfg.MaxQueueDepth,
+			SkillsFilter:         acfg.SkillsFilter,
+			PreferredSearch:      acfg.PreferredSearch,
+			OpenAICompatProvider: agentCompatProvider,
+			OpenAICompatBaseURL:  agentCompatBaseURL,
 		}); err != nil {
 			logger.Error("failed to create agent from config", "agent_id", acfg.AgentID, "error", err)
 		}
@@ -1078,6 +1097,45 @@ The system runs this checklist periodically to ensure health.
 			}()
 		}
 	}
+
+	// Inter-agent message listener: when Agent A sends a message to Agent B,
+	// auto-create a task so Agent B wakes up and processes the message.
+	const maxMessageDepth = 5
+	msgSub := eventBus.Subscribe(bus.TopicAgentMessage)
+	go func() {
+		defer eventBus.Unsubscribe(msgSub)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok := <-msgSub.Ch():
+				if !ok {
+					logger.Warn("agent message subscription closed, inter-agent messaging disabled")
+					return
+				}
+				msg, ok := evt.Payload.(bus.AgentMessageEvent)
+				if !ok {
+					continue
+				}
+				if msg.Depth >= maxMessageDepth {
+					logger.Info("agent message depth limit reached, skipping auto-task",
+						"from", msg.FromAgent, "to", msg.ToAgent, "depth", msg.Depth)
+					continue
+				}
+				// Deterministic UUID: normalize agent pair so A→B and B→A share one session.
+				a, b := msg.FromAgent, msg.ToAgent
+				if a > b {
+					a, b = b, a
+				}
+				sessionID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("agent-msg:"+a+":"+b)).String()
+				prompt := fmt.Sprintf("[Message from @%s]: %s", msg.FromAgent, msg.Content)
+				if _, err := registry.CreateMessageTask(ctx, msg.ToAgent, sessionID, prompt, msg.Depth+1); err != nil {
+					logger.Warn("failed to create auto-task for agent message",
+						"from", msg.FromAgent, "to", msg.ToAgent, "error", err)
+				}
+			}
+		}
+	}()
 
 	// GC-SPEC-DATA-005: Periodic retention job.
 	go func() {

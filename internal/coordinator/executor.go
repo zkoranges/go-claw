@@ -16,6 +16,7 @@ import (
 // GC-SPEC-PDR-v4-Phase-1: Task router interface.
 type ChatTaskRouter interface {
 	CreateChatTask(ctx context.Context, agentID, sessionID, content string) (string, error)
+	CreateMessageTask(ctx context.Context, agentID, sessionID, content string, depth int) (string, error)
 }
 
 // Executor runs DAG plans with real completion tracking.

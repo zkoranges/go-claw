@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/basket/go-claw/internal/audit"
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
 	"github.com/basket/go-claw/internal/shared"
@@ -93,6 +94,16 @@ func sendMessage(ctx context.Context, input *SendMessageInput, store *persistenc
 
 	if err := store.SendAgentMessage(ctx, fromAgent, input.ToAgent, input.Content); err != nil {
 		return nil, fmt.Errorf("send_message: %w", err)
+	}
+
+	// Publish bus event for autonomous agent wake-up.
+	if b := store.Bus(); b != nil {
+		b.Publish(bus.TopicAgentMessage, bus.AgentMessageEvent{
+			FromAgent: fromAgent,
+			ToAgent:   input.ToAgent,
+			Content:   input.Content,
+			Depth:     shared.MessageDepth(ctx),
+		})
 	}
 
 	slog.Info("send_message: message sent",

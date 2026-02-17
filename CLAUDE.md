@@ -204,3 +204,54 @@ internal/
 - Phase 3: Telegram Deep Integration (HITL gates, plan progress, alert tool)
 - Phase 4: A2A Protocol (/.well-known/agent.json endpoint)
 - Manager backward compat methods (AllTools, CallTool, Start, Stop)
+
+---
+
+## v0.5 Implementation Notes
+
+### Current milestone: v0.5 (Streaming & Autonomy)
+### PDR: PDR-v8.md
+### Verify: tools/verify/v05_verify.sh
+
+### Implementation order (strict):
+1. Streaming Responses (internal/engine/brain.go, engine.go, internal/gateway/stream.go, openai_handler.go, internal/channels/telegram.go)
+2. Agent Loops (internal/persistence/loops.go, store.go, internal/engine/loop.go, engine.go, internal/tools/loop_control.go, internal/config/)
+3. Structured Output (internal/engine/structured.go, brain.go, internal/config/)
+4. OpenTelemetry (internal/otel/ — new package, instrumentation across engine, gateway, brain)
+5. Gateway Security (internal/gateway/auth.go, ratelimit.go, cors.go, gateway.go)
+
+### Schema version:
+- Pre-v0.5: v13 (gc-v13-2026-02-15-delegations)
+- Post-v0.5: v14 (gc-v14-2026-02-16-loop-checkpoints)
+- loop_checkpoints table added for agent loop crash recovery
+
+### Key new code:
+- internal/otel/ — OpenTelemetry provider, spans, metrics (zero overhead when disabled)
+- internal/engine/loop.go — LoopRunner with checkpoints, budgets, termination keywords
+- internal/engine/structured.go — JSON Schema validation with extractJSON + ValidateAndRetry
+- internal/gateway/stream.go — SSE streaming endpoint (/api/v1/task/stream)
+- internal/gateway/auth.go — API key authentication middleware (disabled by default)
+- internal/gateway/ratelimit.go — Token bucket rate limiter (per-key isolation)
+- internal/gateway/cors.go — CORS middleware with configurable origins
+- internal/persistence/loops.go — Loop checkpoint CRUD (SaveLoopCheckpoint, LoadLoopCheckpoint)
+- internal/tools/loop_control.go — checkpoint_now + set_loop_status tools
+
+### Key patterns:
+- OTel: use in-memory SpanRecorder for tests, never require external collector
+- Middleware: compose with Wrap() pattern, test independently
+- Streaming: always provide non-streaming fallback path
+- All new files: follow conventions of neighboring files in same package
+- Auth/rate-limit disabled by default (backward compatible)
+
+### Do NOT:
+- Replace Brain.Generate()/Respond() — it's the fallback when streaming unavailable
+- Add new states to the 8-state task machine — loops are above it
+- Require external services in tests (no OTel collector, no LLM calls)
+- Make OTel a hard dependency — everything works with telemetry disabled
+- Store API keys in plaintext in SQLite (use config only for v0.5)
+
+### Verify after each phase:
+Run phase-specific tests, then `just check`, then `go test -race ./...`
+
+### Verify at end:
+./tools/verify/v05_verify.sh

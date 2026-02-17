@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/shared"
 )
@@ -253,4 +255,119 @@ func TestSendMessage_ContentNotInLogFields(t *testing.T) {
 	// This is a design verification test - if someone changes the audit
 	// format to include content, this test documents the expectation.
 	t.Log("PASS: message content is stored only in DB, not in audit subject or slog fields")
+}
+
+func openMsgTestStoreWithBus(t *testing.T, eventBus *bus.Bus) *persistence.Store {
+	t.Helper()
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "goclaw.db"), eventBus)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err := store.EnsureSession(context.Background(), msgTestSession); err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	return store
+}
+
+// TestSendMessage_PublishesBusEvent verifies that sendMessage publishes an
+// AgentMessageEvent on the bus after storing the message.
+func TestSendMessage_PublishesBusEvent(t *testing.T) {
+	eventBus := bus.New()
+	store := openMsgTestStoreWithBus(t, eventBus)
+	pol := msgTestPolicy{allowCap: map[string]bool{capSendMessage: true}}
+
+	registerMsgTestAgent(t, store, "alpha")
+	registerMsgTestAgent(t, store, "beta")
+
+	sub := eventBus.Subscribe(bus.TopicAgentMessage)
+	defer eventBus.Unsubscribe(sub)
+
+	ctx := shared.WithAgentID(context.Background(), "alpha")
+	_, err := sendMessage(ctx, &SendMessageInput{
+		ToAgent: "beta",
+		Content: "hey beta",
+	}, store, pol)
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	select {
+	case evt := <-sub.Ch():
+		msg, ok := evt.Payload.(bus.AgentMessageEvent)
+		if !ok {
+			t.Fatalf("payload type mismatch: %T", evt.Payload)
+		}
+		if msg.FromAgent != "alpha" {
+			t.Fatalf("expected from=alpha, got %q", msg.FromAgent)
+		}
+		if msg.ToAgent != "beta" {
+			t.Fatalf("expected to=beta, got %q", msg.ToAgent)
+		}
+		if msg.Content != "hey beta" {
+			t.Fatalf("expected content='hey beta', got %q", msg.Content)
+		}
+		if msg.Depth != 0 {
+			t.Fatalf("expected depth=0, got %d", msg.Depth)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bus event")
+	}
+}
+
+// TestSendMessage_BusEventCarriesDepth verifies that the bus event carries
+// the message depth from context.
+func TestSendMessage_BusEventCarriesDepth(t *testing.T) {
+	eventBus := bus.New()
+	store := openMsgTestStoreWithBus(t, eventBus)
+	pol := msgTestPolicy{allowCap: map[string]bool{capSendMessage: true}}
+
+	registerMsgTestAgent(t, store, "sender")
+	registerMsgTestAgent(t, store, "receiver")
+
+	sub := eventBus.Subscribe(bus.TopicAgentMessage)
+	defer eventBus.Unsubscribe(sub)
+
+	ctx := shared.WithAgentID(context.Background(), "sender")
+	ctx = shared.WithMessageDepth(ctx, 3)
+
+	_, err := sendMessage(ctx, &SendMessageInput{
+		ToAgent: "receiver",
+		Content: "depth test",
+	}, store, pol)
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	select {
+	case evt := <-sub.Ch():
+		msg := evt.Payload.(bus.AgentMessageEvent)
+		if msg.Depth != 3 {
+			t.Fatalf("expected depth=3, got %d", msg.Depth)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bus event")
+	}
+}
+
+// TestSendMessage_NoBusNoPanic verifies that sendMessage works when
+// store has no bus (nil bus).
+func TestSendMessage_NoBusNoPanic(t *testing.T) {
+	store := openMsgTestStore(t) // no bus
+	pol := msgTestPolicy{allowCap: map[string]bool{capSendMessage: true}}
+
+	registerMsgTestAgent(t, store, "a1")
+	registerMsgTestAgent(t, store, "a2")
+
+	ctx := shared.WithAgentID(context.Background(), "a1")
+	out, err := sendMessage(ctx, &SendMessageInput{
+		ToAgent: "a2",
+		Content: "no bus test",
+	}, store, pol)
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if out.Status != "sent" {
+		t.Fatalf("expected sent, got %q", out.Status)
+	}
 }

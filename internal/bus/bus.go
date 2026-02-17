@@ -40,6 +40,33 @@ const (
 	TopicPlanStepCompleted      = "plan.step.completed"
 )
 
+// Streaming event topics.
+const (
+	TopicStreamToken    = "stream.token"
+	TopicStreamDone     = "stream.done"
+	TopicStreamToolCall = "stream.tool_call"
+)
+
+// StreamTokenEvent is published for each streaming token.
+type StreamTokenEvent struct {
+	TaskID  string `json:"task_id"`
+	AgentID string `json:"agent_id"`
+	Token   string `json:"token"`
+}
+
+// StreamDoneEvent is published when streaming completes.
+type StreamDoneEvent struct {
+	TaskID  string `json:"task_id"`
+	AgentID string `json:"agent_id"`
+}
+
+// StreamToolCallEvent is published when a tool call starts during streaming.
+type StreamToolCallEvent struct {
+	TaskID   string `json:"task_id"`
+	AgentID  string `json:"agent_id"`
+	ToolName string `json:"tool_name"`
+}
+
 // TaskStateChangedEvent is published when a task's state changes.
 type TaskStateChangedEvent struct {
 	TaskID    string // Task ID

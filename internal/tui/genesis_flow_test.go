@@ -325,3 +325,187 @@ func typeString(t *testing.T, m *genesisModel, s string) {
 		*m = result.(genesisModel)
 	}
 }
+
+// TestGenesisFlow_OllamaProvider exercises the Ollama-specific wizard flow:
+// provider → base URL → model → (skip API key) → review.
+func TestGenesisFlow_OllamaProvider(t *testing.T) {
+	m := newGenesisModel()
+	m.input = "Local"
+	m.inputPos = runeLen("Local")
+
+	// Step 1: Name -> Role
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assertStep(t, m, stepRole, "expected stepRole after name")
+
+	// Step 2: Role -> Personality (select first)
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assertStep(t, m, stepPersonality, "expected stepPersonality after role")
+
+	// Step 3: Personality -> Provider (select first)
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assertStep(t, m, stepProvider, "expected stepProvider after personality")
+
+	// Find Ollama in provider list (last item).
+	ollamaIdx := -1
+	for i, p := range builtinProviders {
+		if p.ID == "ollama" {
+			ollamaIdx = i
+			break
+		}
+	}
+	if ollamaIdx < 0 {
+		t.Fatal("ollama not found in builtinProviders")
+	}
+	for i := 0; i < ollamaIdx; i++ {
+		m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Should go to stepBaseURL (not stepModel).
+	assertStep(t, m, stepBaseURL, "expected stepBaseURL after selecting Ollama")
+	if m.provider != "ollama" {
+		t.Fatalf("expected provider=ollama, got %q", m.provider)
+	}
+	if m.input != "http://localhost:11434" {
+		t.Fatalf("expected default base URL, got %q", m.input)
+	}
+
+	// Step 4b: Enter base URL -> Model
+	// Accept default URL.
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assertStep(t, m, stepModel, "expected stepModel after base URL")
+
+	if m.baseURL != "http://localhost:11434" {
+		t.Fatalf("expected baseURL=http://localhost:11434, got %q", m.baseURL)
+	}
+	// Should have fallback models since no Ollama server is running.
+	if len(m.models) == 0 {
+		t.Fatal("expected non-empty models list for ollama (builtin fallback)")
+	}
+
+	// Step 4c: Select first model -> should skip API key and go to Review.
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assertStep(t, m, stepReview, "expected stepReview after model (Ollama skips API key)")
+
+	if m.apiKey != "ollama" {
+		t.Fatalf("expected apiKey=ollama (auto-set), got %q", m.apiKey)
+	}
+
+	// Verify review view.
+	view := m.View()
+	for _, expect := range []string{"Local", "Ollama"} {
+		if !strings.Contains(view, expect) {
+			t.Fatalf("review view missing %q\nview=%s", expect, view)
+		}
+	}
+
+	// Step 6: Confirm -> done.
+	result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = result.(genesisModel)
+	if !m.done || m.result == nil || cmd == nil {
+		t.Fatal("expected done=true with result and tea.Quit cmd")
+	}
+
+	// Verify generated config uses llm: section with openai_compatible.
+	cfg := m.result.Config
+	for _, expect := range []string{
+		"provider: openai_compatible",
+		"openai_compatible_provider: ollama",
+		"openai_compatible_base_url: http://localhost:11434/v1",
+		"openai_model: ollama/",
+		"gemini_api_key: \"ollama\"",
+	} {
+		if !strings.Contains(cfg, expect) {
+			t.Fatalf("config missing %q\nconfig=%s", expect, cfg)
+		}
+	}
+	// Should NOT contain the legacy flat provider field.
+	if strings.Contains(cfg, "llm_provider:") {
+		t.Fatalf("config should not contain llm_provider for Ollama\nconfig=%s", cfg)
+	}
+}
+
+// TestGenesisFlow_OllamaBackNavigation verifies back navigation through
+// Ollama-specific steps (base URL step).
+func TestGenesisFlow_OllamaBackNavigation(t *testing.T) {
+	// Start at stepBaseURL with Ollama selected.
+	m := newGenesisModel()
+	m.step = stepBaseURL
+	m.provider = "ollama"
+	m.baseURL = "http://myserver:11434"
+	m.input = "http://myserver:11434"
+	m.inputPos = runeLen(m.input)
+
+	// Enter base URL -> stepModel.
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assertStep(t, m, stepModel, "expected stepModel after base URL")
+
+	// Back: stepModel -> stepBaseURL.
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEscape})
+	assertStep(t, m, stepBaseURL, "expected stepBaseURL after back from model")
+	if m.input != "http://myserver:11434" {
+		t.Fatalf("expected base URL restored, got %q", m.input)
+	}
+
+	// Back: stepBaseURL -> stepProvider.
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEscape})
+	assertStep(t, m, stepProvider, "expected stepProvider after back from base URL")
+}
+
+// TestGenesisFlow_NonOllamaSkipsBaseURL verifies that non-Ollama providers
+// skip the base URL step entirely.
+func TestGenesisFlow_NonOllamaSkipsBaseURL(t *testing.T) {
+	m := newGenesisModel()
+	m.step = stepProvider
+	m.cursor = 0 // Google
+
+	// Select Google -> should go directly to stepModel.
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assertStep(t, m, stepModel, "expected stepModel, not stepBaseURL")
+	if m.provider != "google" {
+		t.Fatalf("expected provider=google, got %q", m.provider)
+	}
+
+	// Back from stepModel should go to stepProvider (skipping stepBaseURL).
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEscape})
+	assertStep(t, m, stepProvider, "expected stepProvider after back from model (skipping base URL)")
+}
+
+// TestGenesisFlow_OllamaCustomBaseURL verifies a non-default Ollama URL.
+func TestGenesisFlow_OllamaCustomBaseURL(t *testing.T) {
+	m := newGenesisModel()
+	m.step = stepBaseURL
+	m.provider = "ollama"
+	m.input = ""
+	m.inputPos = 0
+
+	// Clear default and type custom URL.
+	m.input = "http://myserver:11434"
+	m.inputPos = runeLen(m.input)
+	m = mustUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assertStep(t, m, stepModel, "expected stepModel after custom URL")
+
+	if m.baseURL != "http://myserver:11434" {
+		t.Fatalf("expected custom baseURL, got %q", m.baseURL)
+	}
+}
+
+// TestDiscoverOllamaModels_InvalidURL verifies graceful fallback for unreachable servers.
+func TestDiscoverOllamaModels_InvalidURL(t *testing.T) {
+	// Should return nil for unreachable server (no panic, no error).
+	models := discoverOllamaModels("http://127.0.0.1:1")
+	if models != nil {
+		t.Fatalf("expected nil for unreachable server, got %v", models)
+	}
+}
+
+// TestOllamaBuiltinModels verifies Ollama has entries in BuiltinModels.
+func TestOllamaBuiltinModels(t *testing.T) {
+	models, ok := config.BuiltinModels["ollama"]
+	if !ok {
+		t.Fatal("expected ollama in BuiltinModels")
+	}
+	if len(models) == 0 {
+		t.Fatal("expected non-empty ollama models list")
+	}
+}

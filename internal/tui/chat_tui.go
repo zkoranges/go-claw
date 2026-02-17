@@ -40,6 +40,21 @@ type brainReplyMsg struct {
 	err   error
 }
 
+// streamChunkMsg delivers a single streaming token from the LLM.
+type streamChunkMsg struct {
+	chunk string
+}
+
+// streamDoneMsg signals the stream has completed successfully.
+type streamDoneMsg struct {
+	fullReply string
+}
+
+// streamErrorMsg signals a streaming error.
+type streamErrorMsg struct {
+	err error
+}
+
 type ctxDoneMsg struct{}
 
 type spinnerTickMsg struct{}
@@ -50,6 +65,11 @@ type statusTickMsg struct{}
 // planEventMsg delivers a plan event from the bus subscription to the TUI update loop.
 type planEventMsg struct {
 	event bus.Event
+}
+
+// agentMsgEventMsg delivers an inter-agent message event to the TUI update loop.
+type agentMsgEventMsg struct {
+	event bus.AgentMessageEvent
 }
 
 // PlanExecutionState tracks an active plan execution for display in the TUI.
@@ -116,6 +136,8 @@ type chatModel struct {
 
 	history    []chatEntry
 	thinking   bool
+	streaming  bool
+	streamCh   <-chan tea.Msg
 	spinnerIdx int
 
 	mode          chatMode
@@ -139,6 +161,9 @@ type chatModel struct {
 	plans   *planTracker
 	planSub *bus.Subscription
 
+	// Inter-agent message events.
+	msgSub *bus.Subscription
+
 	// Activity feed for task/delegation/plan events.
 	activityFeed *ActivityFeed
 }
@@ -158,6 +183,7 @@ func newChatModel(ctx context.Context, cc ChatConfig, sessionID, agentPrefix, mo
 	// Subscribe to plan events from the event bus.
 	if cc.EventBus != nil {
 		m.planSub = cc.EventBus.Subscribe("plan.")
+		m.msgSub = cc.EventBus.Subscribe(bus.TopicAgentMessage)
 	}
 	// Small intro line inside the UI (kept minimal; avoids printing to stdout).
 	m.history = append(m.history, chatEntry{
@@ -177,6 +203,19 @@ func runChatTUI(ctx context.Context, m chatModel, cancel context.CancelFunc) err
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
 	_, err := p.Run()
+
+	// Unsubscribe bus subscriptions so blocked Cmd goroutines (waitForPlanEvent,
+	// waitForAgentMsg) unblock and exit. Without this, the goroutines and bus
+	// references leak after every TUI exit.
+	if m.cc.EventBus != nil {
+		if m.planSub != nil {
+			m.cc.EventBus.Unsubscribe(m.planSub)
+		}
+		if m.msgSub != nil {
+			m.cc.EventBus.Unsubscribe(m.msgSub)
+		}
+	}
+
 	if cancel != nil {
 		cancel()
 	}
@@ -191,6 +230,9 @@ func (m chatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{waitCtxDone(m.ctx), statusTickCmd()}
 	if m.planSub != nil {
 		cmds = append(cmds, waitForPlanEvent(m.planSub))
+	}
+	if m.msgSub != nil {
+		cmds = append(cmds, waitForAgentMsg(m.msgSub))
 	}
 	return tea.Batch(cmds...)
 }
@@ -216,6 +258,25 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if m.planSub != nil {
 			cmd = waitForPlanEvent(m.planSub)
+		}
+		return m, cmd
+
+	case agentMsgEventMsg:
+		content := msg.event.Content
+		if runeCount := len([]rune(content)); runeCount > 80 {
+			content = string([]rune(content)[:80]) + "..."
+		}
+		now := time.Now()
+		m.activityFeed.Add(ActivityItem{
+			ID:        fmt.Sprintf("msg-%s-%s-%d", msg.event.FromAgent, msg.event.ToAgent, now.UnixNano()),
+			Icon:      ">>",
+			Message:   fmt.Sprintf("@%s -> @%s: %s", msg.event.FromAgent, msg.event.ToAgent, content),
+			StartedAt: now,
+			DoneAt:    &now,
+		})
+		var cmd tea.Cmd
+		if m.msgSub != nil {
+			cmd = waitForAgentMsg(m.msgSub)
 		}
 		return m, cmd
 
@@ -474,7 +535,13 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.cc.Store.AddHistory(m.ctx, m.sessionID, m.cc.CurrentAgent, "user", line, tokenutil.EstimateTokens(line))
 			}
 			m.thinking = true
-			return m, tea.Batch(respondCmd(m.ctx, m.cc, m.sessionID, line), waitForSpinner())
+
+			// Start streaming: add a placeholder assistant entry that will be
+			// progressively filled with chunks as they arrive from the LLM.
+			m.history = append(m.history, chatEntry{role: chatRoleAssistant, text: "", agentID: m.cc.CurrentAgent})
+			m.streaming = true
+			m.streamCh = startStream(m.ctx, m.cc, m.sessionID, line)
+			return m, tea.Batch(waitForStream(m.streamCh), waitForSpinner())
 
 		case "up", "ctrl+p":
 			m = m.historyPrev()
@@ -570,10 +637,45 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+	case streamChunkMsg:
+		// Append chunk to the last history entry (the streaming assistant placeholder).
+		if m.streaming && len(m.history) > 0 {
+			m.history[len(m.history)-1].text += msg.chunk
+		}
+		return m, waitForStream(m.streamCh)
+
+	case streamDoneMsg:
+		m.thinking = false
+		m.streaming = false
+		m.streamCh = nil
+		// The last history entry already has the full text from accumulated chunks.
+		// Save to persistent history.
+		if len(m.history) > 0 {
+			last := m.history[len(m.history)-1]
+			if m.cc.Store != nil && last.text != "" {
+				_ = m.cc.Store.AddHistory(m.ctx, m.sessionID, m.cc.CurrentAgent, "assistant", last.text, tokenutil.EstimateTokens(last.text))
+			}
+		}
+		return m, nil
+
+	case streamErrorMsg:
+		m.thinking = false
+		m.streaming = false
+		m.streamCh = nil
+		if m.ctx.Err() != nil {
+			return m, tea.Quit
+		}
+		// Remove the empty placeholder entry if no chunks arrived.
+		if len(m.history) > 0 && m.history[len(m.history)-1].text == "" {
+			m.history = m.history[:len(m.history)-1]
+		}
+		m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error: %v", msg.err)})
+		return m, nil
+
 	case brainReplyMsg:
+		// Fallback for non-streaming paths (e.g. respondCmd used by tests).
 		m.thinking = false
 		if msg.err != nil {
-			// Context cancellation is a normal shutdown path.
 			if m.ctx.Err() != nil {
 				return m, tea.Quit
 			}
@@ -588,7 +690,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinnerTickMsg:
-		if m.thinking {
+		if m.thinking || m.streaming {
 			m.spinnerIdx++
 			return m, waitForSpinner()
 		}
@@ -601,6 +703,61 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// waitForStream blocks on the stream channel and returns the next message.
+// Used in a Bubbletea command chain to progressively deliver streaming tokens.
+func waitForStream(ch <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			// Channel closed without explicit done — treat as complete.
+			return streamDoneMsg{}
+		}
+		return msg
+	}
+}
+
+// startStream launches a goroutine that calls Brain.Stream() and sends chunks
+// through the returned channel. The caller should use waitForStream() to
+// receive progressive updates.
+func startStream(ctx context.Context, cc ChatConfig, sessionID, prompt string) <-chan tea.Msg {
+	ch := make(chan tea.Msg, 64)
+
+	go func() {
+		defer close(ch)
+
+		if cc.Brain == nil {
+			ch <- streamErrorMsg{err: fmt.Errorf("brain not configured")}
+			return
+		}
+
+		// GC-SPEC-RUN-004: Inject agent ID, trace ID, and run ID into context.
+		traceID := shared.NewTraceID()
+		runID := shared.NewRunID()
+		agentCtx := shared.WithAgentID(ctx, cc.CurrentAgent)
+		agentCtx = shared.WithTraceID(agentCtx, traceID)
+		agentCtx = shared.WithRunID(agentCtx, runID)
+		slog.Debug("tui: stream request", "agent_id", cc.CurrentAgent, "session_id", sessionID, "trace_id", traceID, "run_id", runID)
+
+		var buf strings.Builder
+		err := cc.Brain.Stream(agentCtx, sessionID, prompt, func(chunk string) error {
+			buf.WriteString(chunk)
+			ch <- streamChunkMsg{chunk: chunk}
+			return nil
+		})
+
+		if err != nil {
+			slog.Warn("tui: stream error", "agent_id", cc.CurrentAgent, "session_id", sessionID, "trace_id", traceID, "run_id", runID, "error", err)
+			ch <- streamErrorMsg{err: err}
+			return
+		}
+
+		slog.Debug("tui: stream complete", "agent_id", cc.CurrentAgent, "session_id", sessionID, "trace_id", traceID, "run_id", runID)
+		ch <- streamDoneMsg{fullReply: buf.String()}
+	}()
+
+	return ch
 }
 
 func respondCmd(ctx context.Context, cc ChatConfig, sessionID, prompt string) tea.Cmd {
@@ -681,7 +838,10 @@ func (m chatModel) View() string {
 	}
 	b.WriteString(renderCursor(string(m.input), m.cursor))
 	b.WriteString("\n")
-	if m.thinking {
+	if m.streaming {
+		spin := []string{"|", "/", "-", "\\"}[m.spinnerIdx%4]
+		b.WriteString(fmt.Sprintf("%s streaming...\n", spin))
+	} else if m.thinking {
 		spin := []string{"|", "/", "-", "\\"}[m.spinnerIdx%4]
 		b.WriteString(fmt.Sprintf("%s thinking...\n", spin))
 	} else {
@@ -881,6 +1041,24 @@ func waitForPlanEvent(sub *bus.Subscription) tea.Cmd {
 			return nil // channel closed
 		}
 		return planEventMsg{event: event}
+	}
+}
+
+// waitForAgentMsg blocks until an inter-agent message event arrives.
+// It loops on type-assertion mismatches so the listener stays alive.
+func waitForAgentMsg(sub *bus.Subscription) tea.Cmd {
+	return func() tea.Msg {
+		for {
+			event, ok := <-sub.Ch()
+			if !ok {
+				return nil // channel closed
+			}
+			msg, ok := event.Payload.(bus.AgentMessageEvent)
+			if !ok {
+				continue // skip non-matching payloads
+			}
+			return agentMsgEventMsg{event: msg}
+		}
 	}
 }
 

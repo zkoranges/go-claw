@@ -24,6 +24,10 @@ func (m *mockRouter) CreateChatTask(ctx context.Context, agentID, sessionID, con
 	return taskID, nil
 }
 
+func (m *mockRouter) CreateMessageTask(ctx context.Context, agentID, sessionID, content string, _ int) (string, error) {
+	return m.CreateChatTask(ctx, agentID, sessionID, content)
+}
+
 // GC-SPEC-PDR-v4-Phase-3: Test executor construction.
 func TestNewExecutor(t *testing.T) {
 	router := &mockRouter{}

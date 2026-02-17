@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -44,6 +45,13 @@ var BuiltinModels = map[string][]ModelDef{
 		{"openai/gpt-4o", "GPT-4o (via OpenRouter)"},
 		{"meta-llama/llama-3.1-70b-instruct", "Llama 3.1 70B"},
 		{"mistralai/mistral-large-latest", "Mistral Large"},
+	},
+	"ollama": {
+		{"qwen3:8b", "Fast reasoning, multilingual"},
+		{"llama3.1:8b", "Meta Llama 3.1"},
+		{"gemma3:12b", "Google Gemma 3"},
+		{"mistral:7b", "Mistral 7B"},
+		{"deepseek-r1:8b", "DeepSeek R1 reasoning"},
 	},
 }
 
@@ -138,6 +146,78 @@ type MCPConfig struct {
 	Servers []MCPServerConfig `yaml:"servers"`
 }
 
+// LoopConfig controls agent loop behavior (v0.5).
+type LoopConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	MaxSteps           int    `yaml:"max_steps"`
+	MaxTokens          int    `yaml:"max_tokens"`
+	MaxDuration        string `yaml:"max_duration"`
+	CheckpointInterval int    `yaml:"checkpoint_interval"`
+	TerminationKeyword string `yaml:"termination_keyword"`
+}
+
+// StructuredOutputConfig defines schema validation for agent responses (v0.5).
+type StructuredOutputConfig struct {
+	Schema     json.RawMessage `yaml:"schema,omitempty"`
+	SchemaFile string          `yaml:"schema_file,omitempty"`
+	MaxRetries int             `yaml:"max_retries"`
+	StrictMode bool            `yaml:"strict_mode"`
+}
+
+// StreamingConfig controls streaming behavior (v0.5).
+type StreamingConfig struct {
+	Enabled    bool `yaml:"enabled"`
+	BufferSize int  `yaml:"buffer_size"`
+}
+
+// TelemetryConfig controls OpenTelemetry integration (v0.5).
+type TelemetryConfig struct {
+	Enabled        bool    `yaml:"enabled"`
+	Exporter       string  `yaml:"exporter"`
+	Endpoint       string  `yaml:"endpoint"`
+	ServiceName    string  `yaml:"service_name"`
+	SampleRate     float64 `yaml:"sample_rate"`
+	MetricsEnabled *bool   `yaml:"metrics_enabled,omitempty"`
+}
+
+// GatewaySecurityConfig controls gateway authentication and rate limiting (v0.5).
+type GatewaySecurityConfig struct {
+	Auth           AuthConfig      `yaml:"auth,omitempty"`
+	RateLimit      RateLimitConfig `yaml:"rate_limit,omitempty"`
+	CORS           CORSConfig      `yaml:"cors,omitempty"`
+	MaxRequestSize int64           `yaml:"max_request_size,omitempty"`
+}
+
+// AuthConfig controls API key authentication for the gateway (v0.5).
+type AuthConfig struct {
+	Enabled bool          `yaml:"enabled"`
+	Keys    []APIKeyEntry `yaml:"keys"`
+}
+
+// APIKeyEntry defines a single API key with optional scoping (v0.5).
+type APIKeyEntry struct {
+	Key         string   `yaml:"key"`
+	Description string   `yaml:"description,omitempty"`
+	AgentIDs    []string `yaml:"agent_ids,omitempty"`
+	RateLimit   int      `yaml:"rate_limit,omitempty"`
+}
+
+// RateLimitConfig controls request rate limiting (v0.5).
+type RateLimitConfig struct {
+	Enabled           bool `yaml:"enabled"`
+	RequestsPerMinute int  `yaml:"requests_per_minute"`
+	BurstSize         int  `yaml:"burst_size"`
+}
+
+// CORSConfig controls Cross-Origin Resource Sharing (v0.5).
+type CORSConfig struct {
+	Enabled        bool     `yaml:"enabled"`
+	AllowedOrigins []string `yaml:"allowed_origins"`
+	AllowedMethods []string `yaml:"allowed_methods"`
+	AllowedHeaders []string `yaml:"allowed_headers"`
+	MaxAge         int      `yaml:"max_age"`
+}
+
 // AgentConfigEntry defines a named agent to create on startup.
 type AgentConfigEntry struct {
 	AgentID            string         `yaml:"agent_id"`
@@ -152,8 +232,10 @@ type AgentConfigEntry struct {
 	MaxQueueDepth      int            `yaml:"max_queue_depth"`
 	SkillsFilter       []string       `yaml:"skills_filter"`
 	PreferredSearch    string         `yaml:"preferred_search"`
-	Capabilities       []string       `yaml:"capabilities,omitempty"`
-	MCPServers         []AgentMCPRef  `yaml:"mcp_servers,omitempty"` // Per-agent MCP servers (v0.4)
+	Capabilities       []string               `yaml:"capabilities,omitempty"`
+	MCPServers         []AgentMCPRef          `yaml:"mcp_servers,omitempty"`          // Per-agent MCP servers (v0.4)
+	Loop               LoopConfig             `yaml:"loop,omitempty"`                 // Agent loop config (v0.5)
+	StructuredOutput   *StructuredOutputConfig `yaml:"structured_output,omitempty"`   // Structured output config (v0.5)
 }
 
 type Config struct {
@@ -221,6 +303,11 @@ type Config struct {
 	Plans    []PlanConfig       `yaml:"plans"` // GC-SPEC-PDR-v4-Phase-4: Plans for workflows
 	A2A      A2AConfig          `yaml:"a2a,omitempty"`
 
+	// v0.5 config sections.
+	Streaming StreamingConfig        `yaml:"streaming,omitempty"`
+	Telemetry TelemetryConfig        `yaml:"telemetry,omitempty"`
+	Gateway   GatewaySecurityConfig  `yaml:"gateway,omitempty"`
+
 	NeedsGenesis bool `yaml:"-"`
 }
 
@@ -267,10 +354,11 @@ func (c Config) APIKey(name string) string {
 // Env vars take precedence: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY.
 func (c Config) LLMProviderAPIKey(provider string) string {
 	envMap := map[string]string{
-		"google":     "GOOGLE_API_KEY",
-		"anthropic":  "ANTHROPIC_API_KEY",
-		"openai":     "OPENAI_API_KEY",
-		"openrouter": "OPENROUTER_API_KEY",
+		"google":            "GOOGLE_API_KEY",
+		"anthropic":         "ANTHROPIC_API_KEY",
+		"openai":            "OPENAI_API_KEY",
+		"openrouter":        "OPENROUTER_API_KEY",
+		"openai_compatible": "OPENAI_API_KEY",
 	}
 	if envVar, ok := envMap[provider]; ok {
 		if v := os.Getenv(envVar); v != "" {
@@ -282,8 +370,8 @@ func (c Config) LLMProviderAPIKey(provider string) string {
 			return p.APIKey
 		}
 	}
-	// Fallback to deprecated GeminiAPIKey for google
-	if provider == "google" && c.GeminiAPIKey != "" {
+	// Fallback to deprecated GeminiAPIKey for google and openai_compatible
+	if (provider == "google" || provider == "openai_compatible") && c.GeminiAPIKey != "" {
 		return c.GeminiAPIKey
 	}
 	return ""

@@ -23,6 +23,7 @@ var builtinProviders = []providerDef{
 	{ID: "anthropic", Label: "Anthropic"},
 	{ID: "openai", Label: "OpenAI"},
 	{ID: "openrouter", Label: "OpenRouter (100+ models)"},
+	{ID: "ollama", Label: "Ollama (local)"},
 }
 
 type selectorStep int

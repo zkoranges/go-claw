@@ -11,7 +11,7 @@ GoClaw is a single-binary daemon that queues agent tasks in SQLite, executes the
 
 ```
 $ goclaw
-GoClaw v0.3-dev | SQLite WAL | 3 workers | localhost:18789
+GoClaw v0.5-dev | SQLite WAL | 3 workers | localhost:18789
 coder — gemini-2.5-pro
 > @coder implement a fibonacci function in Go
 [task queued] id=a1b2c3 status=QUEUED
@@ -138,16 +138,21 @@ Task delivery is at-least-once. A crash between completing work and writing succ
 
 ## Status
 
-**v0.1-dev** — core subsystems implemented and tested. 250+ tests across 25 packages. Under active development; APIs may change.
+**v0.5-dev** — 800+ tests across 29 packages. Under active development; APIs may change.
 
 | Subsystem | Status |
 |---|---|
-| Persistence (SQLite WAL, schema v6) | Stable |
+| Persistence (SQLite WAL, schema v14) | Stable |
 | Task engine (workers, leases, retry) | Stable |
 | ACP gateway (WebSocket, REST, OpenAI-compat) | Stable |
 | Policy engine (hot-reload) | Stable |
 | WASM sandbox (wazero) | Stable |
 | Multi-agent (registry, routing) | Stable |
+| Streaming responses (SSE, bus events) | Stable |
+| Agent loops (checkpoints, budgets) | Stable |
+| Structured output (JSON Schema validation) | Stable |
+| OpenTelemetry (traces, metrics) | Stable |
+| Gateway security (auth, rate limit, CORS) | Stable |
 | TUI | Functional |
 | Telegram integration | Functional |
 
@@ -175,6 +180,7 @@ internal/
   config/            YAML config, env overlay, fsnotify watcher
   channels/          Telegram integration
   mcp/               MCP client (stdio + SSE)
+  otel/              OpenTelemetry integration (traces, metrics)
   cron/              Cron scheduler
   tui/               Bubbletea TUI
 ```

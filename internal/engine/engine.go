@@ -38,6 +38,8 @@ type Processor interface {
 // channels) from the agent package (which would cause an import cycle).
 type ChatTaskRouter interface {
 	CreateChatTask(ctx context.Context, agentID, sessionID, content string) (string, error)
+	// CreateMessageTask creates a task with inter-agent message depth for loop prevention.
+	CreateMessageTask(ctx context.Context, agentID, sessionID, content string, depth int) (string, error)
 }
 
 // EchoProcessor decodes chatTaskPayload JSON from the task, forwards it to a Brain,
@@ -47,7 +49,8 @@ type EchoProcessor struct {
 }
 
 type chatTaskPayload struct {
-	Content string `json:"content"`
+	Content      string `json:"content"`
+	MessageDepth int    `json:"message_depth,omitempty"`
 }
 
 type chatResultPayload struct {
@@ -251,6 +254,11 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 	ctx = shared.WithTaskID(ctx, task.ID)
 	// Propagate agent_id so tools (send_message, read_messages) know which agent is calling.
 	ctx = shared.WithAgentID(ctx, e.agentID)
+	// Extract message depth from payload for inter-agent loop prevention.
+	var probe chatTaskPayload
+	if err := json.Unmarshal([]byte(task.Payload), &probe); err == nil && probe.MessageDepth > 0 {
+		ctx = shared.WithMessageDepth(ctx, probe.MessageDepth)
+	}
 	slog.Info("task processing", "task_id", task.ID, "session_id", task.SessionID, "trace_id", traceID, "run_id", runID, "agent_id", e.agentID)
 
 	// bgCtx carries observability values (trace_id, run_id) but is not tied to
@@ -409,7 +417,16 @@ func (e *Engine) CreateChatTaskForAgent(ctx context.Context, agentID, sessionID,
 	return e.createChatTask(ctx, agentID, sessionID, content)
 }
 
+// CreateMessageTaskForAgent creates a chat task for inter-agent messaging with depth propagation.
+func (e *Engine) CreateMessageTaskForAgent(ctx context.Context, agentID, sessionID, content string, depth int) (string, error) {
+	return e.createChatTaskWithDepth(ctx, agentID, sessionID, content, depth)
+}
+
 func (e *Engine) createChatTask(ctx context.Context, agentID, sessionID, content string) (string, error) {
+	return e.createChatTaskWithDepth(ctx, agentID, sessionID, content, 0)
+}
+
+func (e *Engine) createChatTaskWithDepth(ctx context.Context, agentID, sessionID, content string, messageDepth int) (string, error) {
 	// GC-SPEC-QUE-008: Apply backpressure at intake when queue is saturated.
 	if e.config.MaxQueueDepth > 0 {
 		var depth int
@@ -433,7 +450,7 @@ func (e *Engine) createChatTask(ctx context.Context, agentID, sessionID, content
 	if err := e.store.AddHistory(ctx, sessionID, agentID, "user", content, tokenutil.EstimateTokens(content)); err != nil {
 		return "", fmt.Errorf("create chat task: add history: %w", err)
 	}
-	payload, err := json.Marshal(chatTaskPayload{Content: content})
+	payload, err := json.Marshal(chatTaskPayload{Content: content, MessageDepth: messageDepth})
 	if err != nil {
 		return "", fmt.Errorf("create chat task: encode payload: %w", err)
 	}

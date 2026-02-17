@@ -26,7 +26,12 @@ func (m *MockBrain) Stream(ctx context.Context, sessionID, content string, onChu
 	if m.StreamFunc != nil {
 		return m.StreamFunc(ctx, sessionID, content, onChunk)
 	}
-	return nil
+	// Delegate to Respond so tests that only set RespondFunc still work with Stream.
+	r, err := m.Respond(ctx, sessionID, content)
+	if err != nil {
+		return err
+	}
+	return onChunk(r)
 }
 
 func TestCompactor_CompactIfNeeded(t *testing.T) {

@@ -12,6 +12,7 @@ type taskIDKey struct{}
 type sessionIDKey struct{}
 type runIDKey struct{}
 type delegationHopKey struct{}
+type messageDepthKey struct{}
 
 // WithTraceID attaches a trace_id to the context.
 func WithTraceID(ctx context.Context, traceID string) context.Context {
@@ -96,6 +97,19 @@ func WithDelegationHop(ctx context.Context, hop int) context.Context {
 // DelegationHop extracts hop count (0 if absent).
 func DelegationHop(ctx context.Context) int {
 	if v, ok := ctx.Value(delegationHopKey{}).(int); ok {
+		return v
+	}
+	return 0
+}
+
+// WithMessageDepth attaches inter-agent message depth to context.
+func WithMessageDepth(ctx context.Context, depth int) context.Context {
+	return context.WithValue(ctx, messageDepthKey{}, depth)
+}
+
+// MessageDepth extracts inter-agent message depth (0 if absent).
+func MessageDepth(ctx context.Context) int {
+	if v, ok := ctx.Value(messageDepthKey{}).(int); ok {
 		return v
 	}
 	return 0

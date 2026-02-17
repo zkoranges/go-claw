@@ -289,6 +289,17 @@ func (r *Registry) CreateChatTask(ctx context.Context, agentID, sessionID, conte
 	return agent.Engine.CreateChatTaskForAgent(ctx, agentID, sessionID, content)
 }
 
+// CreateMessageTask creates a task with inter-agent message depth for loop prevention.
+func (r *Registry) CreateMessageTask(ctx context.Context, agentID, sessionID, content string, depth int) (string, error) {
+	r.mu.RLock()
+	agent, ok := r.agents[agentID]
+	r.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("agent %q not found", agentID)
+	}
+	return agent.Engine.CreateMessageTaskForAgent(ctx, agentID, sessionID, content, depth)
+}
+
 // StreamChatTask routes a streaming chat task to the specified agent's engine.
 func (r *Registry) StreamChatTask(ctx context.Context, agentID, sessionID, content string, onChunk func(string) error) (string, error) {
 	r.mu.RLock()

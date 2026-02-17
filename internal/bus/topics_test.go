@@ -31,15 +31,21 @@ func TestEventTopics_Constants(t *testing.T) {
 		t.Fatal("TopicAgentAlert is empty")
 	}
 
+	// Agent message event
+	if TopicAgentMessage == "" {
+		t.Fatal("TopicAgentMessage is empty")
+	}
+
 	// Verify no duplicates among new topics
 	topics := map[string]bool{
 		TopicPlanStepFailed:          true,
 		TopicHITLApprovalRequested:   true,
 		TopicHITLApprovalResponse:    true,
 		TopicAgentAlert:              true,
+		TopicAgentMessage:            true,
 	}
-	if len(topics) != 4 {
-		t.Fatalf("expected 4 unique new topics, got %d", len(topics))
+	if len(topics) != 5 {
+		t.Fatalf("expected 5 unique new topics, got %d", len(topics))
 	}
 }
 

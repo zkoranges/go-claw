@@ -2584,3 +2584,7 @@ func (r *testChatRouter) CreateChatTask(ctx context.Context, agentID, sessionID,
 	}
 	return taskID, nil
 }
+
+func (r *testChatRouter) CreateMessageTask(ctx context.Context, agentID, sessionID, content string, _ int) (string, error) {
+	return r.CreateChatTask(ctx, agentID, sessionID, content)
+}

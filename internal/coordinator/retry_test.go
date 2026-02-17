@@ -27,6 +27,10 @@ func (m *mockChatTaskRouter) CreateChatTask(ctx context.Context, agentID, sessio
 	return "task-" + string(rune(m.taskIDCounter)), nil
 }
 
+func (m *mockChatTaskRouter) CreateMessageTask(ctx context.Context, agentID, sessionID, prompt string, _ int) (string, error) {
+	return m.CreateChatTask(ctx, agentID, sessionID, prompt)
+}
+
 func TestRetryWithError(t *testing.T) {
 	t.Run("retry_creates_new_task_with_error_context", func(t *testing.T) {
 		router := &mockChatTaskRouter{}

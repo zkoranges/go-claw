@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 )
 
 // mockStore is a test double for Store.
@@ -37,11 +39,20 @@ func (m *mockStore) SetMemory(ctx context.Context, agentID, key, value, source s
 
 // mockBus is a test double for Bus.
 type mockBus struct {
+	mu     sync.Mutex
 	events []interface{}
 }
 
 func (m *mockBus) Publish(event interface{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.events = append(m.events, event)
+}
+
+func (m *mockBus) eventCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.events)
 }
 
 func TestRememberFactToolDefinition(t *testing.T) {
@@ -106,11 +117,10 @@ func TestHandleRememberFact_PublishesEvent(t *testing.T) {
 
 	handler.Handle(context.Background(), "test-agent", input)
 
-	// Event published async, but we know it was queued immediately
-	// Give it a moment to propagate
-	if len(bus.events) < 1 {
-		// Event is published in a goroutine, so it might not be immediate
-		// The test should still pass because the goroutine was launched
+	// Event published async in a goroutine — wait briefly for it.
+	time.Sleep(50 * time.Millisecond)
+	if bus.eventCount() < 1 {
+		t.Error("expected at least 1 event published")
 	}
 }
 

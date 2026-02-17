@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +27,7 @@ const (
 	stepRole                           // Select + custom
 	stepPersonality                    // Select + custom (combined tone+soul)
 	stepProvider                       // Select LLM provider
+	stepBaseURL                        // Text input: server URL (Ollama only)
 	stepModel                          // Select model for chosen provider
 	stepAPIKey                         // Text input (masked)
 	stepReview                         // Summary + confirm
@@ -42,7 +45,7 @@ func displayStep(s genesisStep) int {
 		return 2
 	case stepPersonality:
 		return 3
-	case stepProvider, stepModel:
+	case stepProvider, stepBaseURL, stepModel:
 		return 4
 	case stepAPIKey:
 		return 5
@@ -61,7 +64,7 @@ func displayStepTitle(s genesisStep) string {
 		return "Agent Role"
 	case stepPersonality:
 		return "Personality & Tone"
-	case stepProvider, stepModel:
+	case stepProvider, stepBaseURL, stepModel:
 		return "LLM Provider"
 	case stepAPIKey:
 		return "API Key"
@@ -86,7 +89,8 @@ type genesisModel struct {
 	agentEmoji  string
 	role        string
 	personality string
-	provider    string     // LLM provider ID (e.g. "google")
+	provider    string     // LLM provider ID (e.g. "google", "ollama")
+	baseURL     string     // Server URL for Ollama (e.g. "http://localhost:11434")
 	modelID     string     // Model ID (e.g. "gemini-2.5-flash")
 	models      []modelDef // Models for the selected provider
 	apiKey      string
@@ -152,7 +156,7 @@ func (m genesisModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Step-specific key handling
 		switch m.step {
-		case stepName, stepAPIKey:
+		case stepName, stepBaseURL, stepAPIKey:
 			return m.handleTextInputKey(key)
 		case stepRole, stepPersonality, stepProvider, stepModel:
 			return m.handleSelectKey(key)
@@ -283,6 +287,14 @@ func (m genesisModel) handleBack() (tea.Model, tea.Cmd) {
 	}
 	m.step--
 
+	// Skip steps that don't apply to this provider.
+	if m.step == stepBaseURL && m.provider != "ollama" {
+		m.step--
+	}
+	if m.step == stepAPIKey && m.provider == "ollama" {
+		m.step--
+	}
+
 	// Restore state for the step we're going back to.
 	switch m.step {
 	case stepName:
@@ -297,8 +309,18 @@ func (m genesisModel) handleBack() (tea.Model, tea.Cmd) {
 		m.customMode = false
 	case stepProvider:
 		m.cursor = m.findProviderCursor()
+	case stepBaseURL:
+		m.input = m.baseURL
+		if m.input == "" {
+			m.input = "http://localhost:11434"
+		}
+		m.inputPos = runeLen(m.input)
 	case stepModel:
-		m.models = modelsForProvider(m.provider)
+		if m.provider == "ollama" {
+			m.models = m.ollamaModels()
+		} else {
+			m.models = modelsForProvider(m.provider)
+		}
 		m.cursor = m.findModelCursor()
 	case stepAPIKey:
 		m.input = m.apiKey
@@ -345,6 +367,8 @@ func providerEmoji(id string) string {
 		return "🟢"
 	case "openrouter":
 		return "🔀"
+	case "ollama":
+		return "🦙"
 	default:
 		return "🔌"
 	}
@@ -367,6 +391,46 @@ func modelsForProvider(providerID string) []modelDef {
 		return models
 	}
 	return nil
+}
+
+// ollamaModels returns models discovered from the Ollama server, falling back
+// to the builtin list if the server is unreachable.
+func (m genesisModel) ollamaModels() []modelDef {
+	if discovered := discoverOllamaModels(m.baseURL); len(discovered) > 0 {
+		return discovered
+	}
+	return modelsForProvider("ollama")
+}
+
+// discoverOllamaModels queries an Ollama server's /api/tags endpoint to get
+// the list of locally available models.
+func discoverOllamaModels(baseURL string) []modelDef {
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+	url := strings.TrimSuffix(baseURL, "/") + "/api/tags"
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+	var models []modelDef
+	for _, m := range result.Models {
+		models = append(models, modelDef{ID: m.Name})
+	}
+	return models
 }
 
 func (m genesisModel) findPersonalityCursor() int {
@@ -416,15 +480,40 @@ func (m genesisModel) handleEnter() (tea.Model, tea.Cmd) {
 
 	case stepProvider:
 		m.provider = builtinProviders[m.cursor].ID
-		m.models = modelsForProvider(m.provider)
+		if m.provider == "ollama" {
+			m.step = stepBaseURL
+			m.input = m.baseURL
+			if m.input == "" {
+				m.input = "http://localhost:11434"
+			}
+			m.inputPos = runeLen(m.input)
+		} else {
+			m.models = modelsForProvider(m.provider)
+			m.step = stepModel
+			m.cursor = 0
+		}
+
+	case stepBaseURL:
+		url := strings.TrimSpace(m.input)
+		if url == "" {
+			url = "http://localhost:11434"
+		}
+		m.baseURL = strings.TrimSuffix(url, "/")
+		m.models = m.ollamaModels()
 		m.step = stepModel
 		m.cursor = 0
 
 	case stepModel:
 		m.modelID = m.models[m.cursor].ID
-		m.step = stepAPIKey
-		m.input = ""
-		m.inputPos = 0
+		if m.provider == "ollama" {
+			// Ollama doesn't need an API key; skip to review.
+			m.apiKey = "ollama"
+			m.step = stepReview
+		} else {
+			m.step = stepAPIKey
+			m.input = ""
+			m.inputPos = 0
+		}
 
 	case stepAPIKey:
 		m.apiKey = sanitizeAPIKey(m.input)
@@ -536,6 +625,11 @@ func (m genesisModel) View() string {
 			}
 			b.WriteString(fmt.Sprintf("  %s%s  %s\n", cursor, providerEmoji(p.ID), p.Label))
 		}
+
+	case stepBaseURL:
+		b.WriteString("  Enter your Ollama server URL:\n\n")
+		b.WriteString(fmt.Sprintf("  > %s\n", renderCursor(m.input, m.inputPos)))
+		b.WriteString("\n  Press Enter for default (http://localhost:11434)\n")
 
 	case stepModel:
 		provLabel := m.provider
@@ -668,11 +762,27 @@ func (m genesisModel) generateConfig() string {
 	b.WriteString("# GoClaw Configuration\n")
 	b.WriteString("# Generated by the Setup Wizard\n\n")
 	b.WriteString(fmt.Sprintf("agent_name: %s\n", m.agentName))
-	b.WriteString(fmt.Sprintf("llm_provider: %s\n", provider))
-	b.WriteString(fmt.Sprintf("gemini_model: %s\n", model))
-	if m.apiKey != "" {
-		b.WriteString(fmt.Sprintf("gemini_api_key: \"%s\"\n", m.apiKey))
+
+	if provider == "ollama" {
+		baseURL := m.baseURL
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
+		compatURL := strings.TrimSuffix(baseURL, "/") + "/v1"
+		b.WriteString("llm:\n")
+		b.WriteString("  provider: openai_compatible\n")
+		b.WriteString("  openai_compatible_provider: ollama\n")
+		b.WriteString(fmt.Sprintf("  openai_compatible_base_url: %s\n", compatURL))
+		b.WriteString(fmt.Sprintf("  openai_model: ollama/%s\n", model))
+		b.WriteString("gemini_api_key: \"ollama\"\n")
+	} else {
+		b.WriteString(fmt.Sprintf("llm_provider: %s\n", provider))
+		b.WriteString(fmt.Sprintf("gemini_model: %s\n", model))
+		if m.apiKey != "" {
+			b.WriteString(fmt.Sprintf("gemini_api_key: \"%s\"\n", m.apiKey))
+		}
 	}
+
 	b.WriteString("worker_count: 4\n")
 	b.WriteString("task_timeout_seconds: 600\n")
 	b.WriteString("bind_addr: 127.0.0.1:18789\n")

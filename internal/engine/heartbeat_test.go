@@ -26,6 +26,13 @@ func (m *mockChatTaskRouter) CreateChatTask(_ context.Context, agentID, sessionI
 	return m.taskID, m.err
 }
 
+func (m *mockChatTaskRouter) CreateMessageTask(_ context.Context, agentID, sessionID, content string, _ int) (string, error) {
+	m.lastAgentID = agentID
+	m.lastSessionID = sessionID
+	m.lastContent = content
+	return m.taskID, m.err
+}
+
 func TestHeartbeatManager_RunOnce(t *testing.T) {
 	// Setup temp home
 	homeDir := t.TempDir()
