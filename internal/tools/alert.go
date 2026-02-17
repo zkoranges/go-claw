@@ -84,6 +84,7 @@ func registerAlert(g *genkit.Genkit, reg *Registry) ai.ToolRef {
 	return genkit.DefineTool(g, "send_alert",
 		"Send an alert to operators with a specified severity level (info, warning, or critical). Severity must be one of the three supported levels.",
 		func(ctx *ai.ToolContext, input AlertInput) (AlertOutput, error) {
+			reg.publishToolCall(ctx, "send_alert")
 			var b *bus.Bus
 			if reg.Store != nil {
 				b = reg.Store.Bus()

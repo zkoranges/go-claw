@@ -13,6 +13,7 @@ type sessionIDKey struct{}
 type runIDKey struct{}
 type delegationHopKey struct{}
 type messageDepthKey struct{}
+type samplingConfigKey struct{}
 
 // WithTraceID attaches a trace_id to the context.
 func WithTraceID(ctx context.Context, traceID string) context.Context {
@@ -113,6 +114,28 @@ func MessageDepth(ctx context.Context) int {
 		return v
 	}
 	return 0
+}
+
+// SamplingConfig holds per-request LLM sampling parameters.
+type SamplingConfig struct {
+	Temperature    *float64
+	TopP           *float64
+	TopK           *int
+	MaxOutputTokens *int
+	StopSequences  []string
+}
+
+// WithSamplingConfig attaches sampling parameters to the context.
+func WithSamplingConfig(ctx context.Context, cfg *SamplingConfig) context.Context {
+	return context.WithValue(ctx, samplingConfigKey{}, cfg)
+}
+
+// GetSamplingConfig extracts sampling parameters from context. Returns nil if absent.
+func GetSamplingConfig(ctx context.Context) *SamplingConfig {
+	if v, ok := ctx.Value(samplingConfigKey{}).(*SamplingConfig); ok {
+		return v
+	}
+	return nil
 }
 
 const DefaultAgentID = "default"

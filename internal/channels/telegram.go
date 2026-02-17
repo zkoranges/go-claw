@@ -202,7 +202,7 @@ func (t *TelegramChannel) handleMessage(ctx context.Context, msg *tgbotapi.Messa
 	taskID, err := t.router.CreateChatTask(ctx, agentID, sessionID, content)
 	if err != nil {
 		t.logger.Error("failed to create telegram task", "error", err)
-		t.reply(msg.Chat.ID, "Error: could not schedule task.")
+		t.reply(msg.Chat.ID, fmt.Sprintf("Error: could not schedule task: %v", err))
 		return
 	}
 
@@ -319,7 +319,11 @@ func (t *TelegramChannel) monitorViaBus(ctx context.Context) {
 					t.reply(chatID, "Task failed (details unavailable).")
 					continue
 				}
-				t.reply(chatID, fmt.Sprintf("Task failed: %s", task.Error))
+				errMsg := task.Error
+				if errMsg == "" {
+					errMsg = "unknown error"
+				}
+				t.reply(chatID, fmt.Sprintf("Task failed: %s", errMsg))
 
 			case "task.canceled":
 				t.reply(chatID, "Task was canceled.")

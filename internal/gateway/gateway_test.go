@@ -1951,8 +1951,9 @@ func TestBug1_OpenAIStreamingDeliversChunksBeforeDone(t *testing.T) {
 	if len(dataChunks) == 0 {
 		t.Fatalf("no content chunks received before [DONE]")
 	}
-	if len(dataChunks) != 3 {
-		t.Fatalf("expected 3 chunks, got %d", len(dataChunks))
+	// 3 content chunks + 1 final chunk with finish_reason="stop" and usage.
+	if len(dataChunks) != 4 {
+		t.Fatalf("expected 4 chunks (3 content + 1 finish), got %d", len(dataChunks))
 	}
 }
 

@@ -3,8 +3,10 @@ package tools
 import (
 	"context"
 
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/persistence"
 	"github.com/basket/go-claw/internal/policy"
+	"github.com/basket/go-claw/internal/shared"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 )
@@ -19,6 +21,19 @@ type Registry struct {
 	ShellExecutor     Executor           // Optional override for shell execution
 	Store             *persistence.Store // Optional: enables spawn_task tool
 	DelegationMaxHops int                // Max delegation chain depth (default 2)
+	Bus               *bus.Bus           // Optional: publishes tool call events for visibility
+}
+
+// publishToolCall publishes a StreamToolCallEvent if Bus is non-nil.
+func (r *Registry) publishToolCall(ctx context.Context, toolName string) {
+	if r.Bus == nil {
+		return
+	}
+	r.Bus.Publish(bus.TopicStreamToolCall, bus.StreamToolCallEvent{
+		TaskID:   shared.TaskID(ctx),
+		AgentID:  shared.AgentID(ctx),
+		ToolName: toolName,
+	})
 }
 
 // NewRegistry builds a Registry with providers ordered by preference.

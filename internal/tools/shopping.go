@@ -46,6 +46,7 @@ func registerShopping(g *genkit.Genkit, reg *Registry) ai.Tool {
 	return genkit.DefineTool(g, "price_comparison",
 		"Compare prices of two products by searching the web. Input should contain a comparison prompt like 'compare price of X vs Y'. Returns structured price data with sources.",
 		func(ctx *ai.ToolContext, input PriceComparisonInput) (PriceComparisonOutput, error) {
+			reg.publishToolCall(ctx, "price_comparison")
 			return comparePrices(ctx, input, reg)
 		},
 	)

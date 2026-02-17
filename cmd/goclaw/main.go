@@ -184,6 +184,11 @@ func main() {
 				}
 				greeting := tui.GreetingFromSoul(cfg.SOUL)
 				fmt.Println(greeting)
+				fmt.Println("\nQuick start:")
+				fmt.Println("  Type a message to chat with your agent")
+				fmt.Println("  /help        — see all commands")
+				fmt.Println("  @coder       — switch to an agent")
+				fmt.Println("  Ctrl+N       — create a new agent")
 				logger.Info("genesis greeting", "message", greeting)
 			}
 		} else {

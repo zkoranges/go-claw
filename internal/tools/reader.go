@@ -29,6 +29,7 @@ func registerReader(g *genkit.Genkit, reg *Registry) ai.Tool {
 	return genkit.DefineTool(g, "read_url",
 		"Fetch and read the content of a web page URL. Returns the page content as simplified text. Use this to read articles, documentation, or any web page.",
 		func(ctx *ai.ToolContext, input ReaderInput) (ReaderOutput, error) {
+			reg.publishToolCall(ctx, "read_url")
 			return reg.Read(ctx, input.URL)
 		},
 	)

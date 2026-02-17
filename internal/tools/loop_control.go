@@ -36,6 +36,7 @@ func RegisterLoopControlTools(g *genkit.Genkit, reg *Registry, eventBus *bus.Bus
 	checkpointTool := genkit.DefineTool(g, "checkpoint_now",
 		"Force an immediate checkpoint of the current loop state. Use before risky operations.",
 		func(ctx *ai.ToolContext, input CheckpointInput) (CheckpointOutput, error) {
+			reg.publishToolCall(ctx, "checkpoint_now")
 			// The engine intercepts this tool call to trigger a checkpoint save.
 			// The tool itself simply acknowledges the request.
 			return CheckpointOutput{Saved: true}, nil
@@ -45,6 +46,7 @@ func RegisterLoopControlTools(g *genkit.Genkit, reg *Registry, eventBus *bus.Bus
 	statusTool := genkit.DefineTool(g, "set_loop_status",
 		"Update the loop's status message visible to users. Use to report progress.",
 		func(ctx *ai.ToolContext, input LoopStatusInput) (LoopStatusOutput, error) {
+			reg.publishToolCall(ctx, "set_loop_status")
 			if eventBus != nil {
 				eventBus.Publish("loop.status_update", map[string]string{
 					"status": input.Status,

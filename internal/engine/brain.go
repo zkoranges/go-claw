@@ -254,6 +254,9 @@ func NewGenkitBrain(ctx context.Context, store *persistence.Store, cfg BrainConf
 	}
 
 	toolRegistry := tools.NewRegistry(cfg.Policy, cfg.APIKeys, cfg.PreferredSearch, store)
+	if store != nil {
+		toolRegistry.Bus = store.Bus()
+	}
 	toolRegistry.RegisterAll(g)
 
 	// Create the brain struct so closures below can capture it.
@@ -600,7 +603,28 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 	}
 
 	if !b.llmOn {
-		return "I can answer with full LLM reasoning after an API key is configured.", nil
+		return "No API key configured. Set the appropriate environment variable (e.g. GEMINI_API_KEY) or use /config in the TUI to add one. Run /model list to see available providers.", nil
+	}
+
+	// Apply per-request sampling config from context (OpenAI API passthrough).
+	if sc := shared.GetSamplingConfig(ctx); sc != nil {
+		gcc := &ai.GenerationCommonConfig{}
+		if sc.Temperature != nil {
+			gcc.Temperature = *sc.Temperature
+		}
+		if sc.TopP != nil {
+			gcc.TopP = *sc.TopP
+		}
+		if sc.TopK != nil {
+			gcc.TopK = *sc.TopK
+		}
+		if sc.MaxOutputTokens != nil {
+			gcc.MaxOutputTokens = *sc.MaxOutputTokens
+		}
+		if len(sc.StopSequences) > 0 {
+			gcc.StopSequences = sc.StopSequences
+		}
+		opts = append(opts, ai.WithConfig(gcc))
 	}
 
 	// Build model name based on provider and prepend to options
@@ -630,7 +654,7 @@ func (b *GenkitBrain) Respond(ctx context.Context, sessionID, content string) (s
 					slog.Warn("leak detector triggered on LLM output", "session_id", sessionID, "findings_count", len(findings))
 				}
 			}
-			return reply, nil
+			return "[Note: tools were unavailable for this response]\n\n" + reply, nil
 		}
 		return "", fmt.Errorf("genkit generate: %w", err)
 	}
@@ -767,6 +791,27 @@ func (b *GenkitBrain) Stream(ctx context.Context, sessionID, content string, onC
 	if b.toolsSupported && len(b.tools.Tools) > 0 {
 		opts = append(opts, ai.WithTools(b.tools.Tools...))
 		opts = append(opts, ai.WithMaxTurns(3))
+	}
+
+	// Apply per-request sampling config from context (OpenAI API passthrough).
+	if sc := shared.GetSamplingConfig(ctx); sc != nil {
+		gcc := &ai.GenerationCommonConfig{}
+		if sc.Temperature != nil {
+			gcc.Temperature = *sc.Temperature
+		}
+		if sc.TopP != nil {
+			gcc.TopP = *sc.TopP
+		}
+		if sc.TopK != nil {
+			gcc.TopK = *sc.TopK
+		}
+		if sc.MaxOutputTokens != nil {
+			gcc.MaxOutputTokens = *sc.MaxOutputTokens
+		}
+		if len(sc.StopSequences) > 0 {
+			gcc.StopSequences = sc.StopSequences
+		}
+		opts = append(opts, ai.WithConfig(gcc))
 	}
 
 	// Build model name

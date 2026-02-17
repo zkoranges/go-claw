@@ -115,6 +115,7 @@ func registerSpawn(g *genkit.Genkit, reg *Registry) ai.ToolRef {
 	return genkit.DefineTool(g, "spawn_task",
 		"Create a subtask linked to a parent task. Requires tools.spawn_task capability.",
 		func(ctx *ai.ToolContext, input SpawnTaskInput) (SpawnTaskOutput, error) {
+			reg.publishToolCall(ctx, "spawn_task")
 			out, err := spawnTask(ctx, &input, reg.Store, reg.Policy)
 			if err != nil {
 				return SpawnTaskOutput{}, err

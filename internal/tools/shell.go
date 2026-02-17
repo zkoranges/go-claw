@@ -108,6 +108,7 @@ func registerShell(g *genkit.Genkit, reg *Registry) ai.ToolRef {
 	return genkit.DefineTool(g, "exec",
 		"Execute a shell command and return its output. Commands on the deny list (rm, sudo, kill, etc.) are blocked. Output is truncated to 8KB and secrets are redacted.",
 		func(ctx *ai.ToolContext, input ShellInput) (ShellOutput, error) {
+			reg.publishToolCall(ctx, "exec")
 			if reg.Policy == nil || !reg.Policy.AllowCapability("tools.exec") {
 				pv := policyVersion(reg.Policy)
 				audit.Record("deny", "tools.exec", "missing_capability", pv, "exec")

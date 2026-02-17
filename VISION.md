@@ -75,7 +75,7 @@ Code Agent: Fixed. Here's the complete refactored module with
 
 **Value:** One prompt triggers a multi-specialist workflow. The human stays in control but doesn't have to orchestrate manually.
 
-### Pattern 3: Team Workflows (next milestone)
+### Pattern 3: Team Workflows (available)
 
 Repeatable multi-agent pipelines defined as data. You trigger a named plan; agents execute in the right order, passing results between steps.
 
@@ -179,34 +179,41 @@ The gap GoClaw fills: **no existing tool combines interactive multi-agent chat w
 
 ## Roadmap
 
-### v0.1 — Solid Foundation (current)
+### v0.1 — Solid Foundation [COMPLETE]
 - ✅ Multi-agent TUI with agent switching
 - ✅ Multi-provider support (OpenAI, Gemini, Anthropic, Ollama)
 - ✅ SQLite persistence, WebSocket API
 - ✅ Inter-agent messaging (sync)
 - ✅ Policy enforcement, WASM skills
 
-### v0.2 — Delegation Done Right
-- Async delegation with structured request/response
-- Agent capability manifest and discovery
-- Shared context store per task tree
-- Task parent/child relationships
-- Delegation visibility in TUI (status, navigation, cancellation)
+### v0.2 — The Happy Path [COMPLETE]
+- ✅ @mentions for agent routing (`@coder fix this bug`)
+- ✅ Starter agents (coder, researcher, writer) on first run
+- ✅ Agent creation modal (Ctrl+N)
+- ✅ `goclaw pull` for fetching agent configs from URLs
+- ✅ Activity feed with bus event subscriptions
 
-### v0.3 — Team Workflows
-- Plan-as-data format (YAML/JSON task graphs)
-- DAG executor with dependency resolution and parallel execution
-- `/plan` command to trigger named workflows
-- Plan progress view in TUI
-- Human-in-the-loop approval gates
+### v0.3 — Context and Memory [COMPLETE]
+- ✅ Context pinning with file watcher auto-updates
+- ✅ Agent memory with relevance scoring and time decay
+- ✅ Auto-memory (LLM-extracted facts from conversations)
+- ✅ Shared team knowledge (agent-to-agent)
+- ✅ Executor error-as-input with retry
 
-### v0.4 — Interoperability & Ecosystem
-- MCP client support (universal tool integration)
-- A2A protocol support (cross-framework agent communication)
-- Analytics API for external dashboards
-- Plugin system for custom tools and integrations
+### v0.4 — Tools and Reach [COMPLETE]
+- ✅ MCP client (per-agent configuration, policy-enforced)
+- ✅ Telegram deep integration (HITL gates, plan progress, alerts)
+- ✅ Async delegation with engine-level result injection
+- ✅ A2A protocol endpoint (/.well-known/agent.json)
 
-### v1.0 — The Swiss Army Knife
+### v0.5 — Streaming and Autonomy [COMPLETE]
+- ✅ SSE streaming responses (gateway + OpenAI-compat + Telegram)
+- ✅ Agent loops with checkpoints and budget enforcement
+- ✅ Structured output with JSON Schema validation
+- ✅ OpenTelemetry integration (spans, metrics, zero overhead when off)
+- ✅ Gateway security (auth, rate limiting, CORS)
+
+### v1.0 — Production (next)
 - All four interaction patterns working reliably
 - LLM-generated plans (Pattern 4 via tool calls)
 - Stable API, documented configuration, tested at scale

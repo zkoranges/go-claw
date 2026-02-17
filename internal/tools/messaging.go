@@ -166,6 +166,7 @@ func registerMessaging(g *genkit.Genkit, reg *Registry) []ai.ToolRef {
 	sendTool := genkit.DefineTool(g, "send_message",
 		"Send a message to another agent. The message will be stored and the recipient can read it with read_messages. Requires tools.send_message capability.",
 		func(ctx *ai.ToolContext, input SendMessageInput) (SendMessageOutput, error) {
+			reg.publishToolCall(ctx, "send_message")
 			out, err := sendMessage(ctx, &input, reg.Store, reg.Policy)
 			if err != nil {
 				return SendMessageOutput{}, err
@@ -177,6 +178,7 @@ func registerMessaging(g *genkit.Genkit, reg *Registry) []ai.ToolRef {
 	readTool := genkit.DefineTool(g, "read_messages",
 		"Read unread messages from other agents. Messages are marked as read after retrieval. Requires tools.read_messages capability.",
 		func(ctx *ai.ToolContext, input ReadMessagesInput) (ReadMessagesOutput, error) {
+			reg.publishToolCall(ctx, "read_messages")
 			out, err := readMessages(ctx, &input, reg.Store, reg.Policy)
 			if err != nil {
 				return ReadMessagesOutput{}, err

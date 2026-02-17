@@ -59,6 +59,7 @@ func registerMemoryTools(g *genkit.Genkit, reg *Registry) []ai.ToolRef {
 	readTool := genkit.DefineTool(g, "memory_read",
 		"Read a file from the agent memory workspace. Path is relative to the workspace root.",
 		func(ctx *ai.ToolContext, input MemoryReadInput) (MemoryReadOutput, error) {
+			reg.publishToolCall(ctx, "memory_read")
 			if reg.Policy == nil || !reg.Policy.AllowCapability("tools.memory_read") {
 				pv := policyVersion(reg.Policy)
 				audit.Record("deny", "tools.memory_read", "missing_capability", pv, "memory_read")
@@ -81,6 +82,7 @@ func registerMemoryTools(g *genkit.Genkit, reg *Registry) []ai.ToolRef {
 	writeTool := genkit.DefineTool(g, "memory_write",
 		"Write or append content to a file in the agent memory workspace. Path is relative to the workspace root. Set append=true to append instead of overwrite.",
 		func(ctx *ai.ToolContext, input MemoryWriteInput) (MemoryWriteOutput, error) {
+			reg.publishToolCall(ctx, "memory_write")
 			if reg.Policy == nil || !reg.Policy.AllowCapability("tools.memory_write") {
 				pv := policyVersion(reg.Policy)
 				audit.Record("deny", "tools.memory_write", "missing_capability", pv, "memory_write")
@@ -108,6 +110,7 @@ func registerMemoryTools(g *genkit.Genkit, reg *Registry) []ai.ToolRef {
 	searchTool := genkit.DefineTool(g, "memory_search",
 		"Search the agent memory workspace for files containing the query string. Returns matching lines with file paths and line numbers.",
 		func(ctx *ai.ToolContext, input MemorySearchInput) (MemorySearchOutput, error) {
+			reg.publishToolCall(ctx, "memory_search")
 			if reg.Policy == nil || !reg.Policy.AllowCapability("tools.memory_read") {
 				pv := policyVersion(reg.Policy)
 				audit.Record("deny", "tools.memory_read", "missing_capability", pv, "memory_search")

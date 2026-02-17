@@ -48,6 +48,7 @@ func Run(ctx context.Context, cfg *config.Config, version string) Diagnosis {
 
 	checks := []func(context.Context, *config.Config) CheckResult{
 		checkConfig,
+		checkAPIKey,
 		checkDatabase,
 		checkPermissions,
 		checkExternalTools,
@@ -69,6 +70,42 @@ func checkConfig(ctx context.Context, cfg *config.Config) CheckResult {
 		return CheckResult{Name: "Config", Status: "WARN", Message: "Configuration missing (needs genesis)"}
 	}
 	return CheckResult{Name: "Config", Status: "PASS", Message: fmt.Sprintf("Loaded from %s", cfg.HomeDir)}
+}
+
+func checkAPIKey(_ context.Context, cfg *config.Config) CheckResult {
+	if cfg == nil {
+		return CheckResult{Name: "API Key", Status: "SKIP", Message: "Config missing"}
+	}
+
+	provider := "google"
+	if cfg.LLM.Provider != "" {
+		provider = strings.ToLower(cfg.LLM.Provider)
+	} else if cfg.LLMProvider != "" {
+		provider = strings.ToLower(cfg.LLMProvider)
+	}
+
+	envVars := map[string]string{
+		"google":    "GEMINI_API_KEY",
+		"openai":    "OPENAI_API_KEY",
+		"anthropic": "ANTHROPIC_API_KEY",
+	}
+
+	envVar, ok := envVars[provider]
+	if !ok {
+		// Ollama, openai_compatible, etc. — no key required or provider-specific
+		return CheckResult{Name: "API Key", Status: "PASS", Message: fmt.Sprintf("Provider %q uses api_key from config (no standard env var)", provider)}
+	}
+
+	if os.Getenv(envVar) != "" {
+		return CheckResult{Name: "API Key", Status: "PASS", Message: fmt.Sprintf("%s is set", envVar)}
+	}
+
+	return CheckResult{
+		Name:    "API Key",
+		Status:  "WARN",
+		Message: fmt.Sprintf("%s not set (required for %s provider)", envVar, provider),
+		Detail:  fmt.Sprintf("Set %s or use /config in the TUI to configure", envVar),
+	}
 }
 
 func checkDatabase(ctx context.Context, cfg *config.Config) CheckResult {

@@ -30,6 +30,7 @@ func registerSearch(g *genkit.Genkit, reg *Registry) ai.Tool {
 	return genkit.DefineTool(g, "web_search",
 		"Search the web for current information. Returns results with titles, URLs, and snippets. Use this tool immediately when the user asks to search or look something up — do not ask for confirmation.",
 		func(ctx *ai.ToolContext, input SearchInput) (SearchOutput, error) {
+			reg.publishToolCall(ctx, "web_search")
 			return reg.Search(ctx, input.Query)
 		},
 	)

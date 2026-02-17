@@ -344,6 +344,7 @@ func registerDelegate(g *genkit.Genkit, reg *Registry) ai.ToolRef {
 	return genkit.DefineTool(g, "delegate_task",
 		"Delegate a task to another agent and wait for its result. The calling agent's turn pauses until the target agent completes. Requires tools.delegate_task capability.",
 		func(ctx *ai.ToolContext, input DelegateTaskInput) (DelegateTaskOutput, error) {
+			reg.publishToolCall(ctx, "delegate_task")
 			maxHops := reg.DelegationMaxHops
 			if maxHops <= 0 {
 				maxHops = 2 // Fallback default
@@ -361,6 +362,7 @@ func registerDelegateAsync(g *genkit.Genkit, reg *Registry) ai.ToolRef {
 	return genkit.DefineTool(g, "delegate_task_async",
 		"Delegate a task to another agent without waiting for its result. Returns immediately with a delegation ID. Requires tools.delegate_task_async capability.",
 		func(ctx *ai.ToolContext, input AsyncDelegateTaskInput) (AsyncDelegateTaskOutput, error) {
+			reg.publishToolCall(ctx, "delegate_task_async")
 			maxHops := reg.DelegationMaxHops
 			if maxHops <= 0 {
 				maxHops = 2 // Fallback default

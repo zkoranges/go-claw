@@ -72,6 +72,11 @@ type agentMsgEventMsg struct {
 	event bus.AgentMessageEvent
 }
 
+// toolCallMsg delivers a tool call event to the TUI update loop.
+type toolCallMsg struct {
+	event bus.StreamToolCallEvent
+}
+
 // PlanExecutionState tracks an active plan execution for display in the TUI.
 type PlanExecutionState struct {
 	ExecutionID    string
@@ -164,6 +169,9 @@ type chatModel struct {
 	// Inter-agent message events.
 	msgSub *bus.Subscription
 
+	// Tool call events for activity feed visibility.
+	toolSub *bus.Subscription
+
 	// Activity feed for task/delegation/plan events.
 	activityFeed *ActivityFeed
 }
@@ -184,6 +192,7 @@ func newChatModel(ctx context.Context, cc ChatConfig, sessionID, agentPrefix, mo
 	if cc.EventBus != nil {
 		m.planSub = cc.EventBus.Subscribe("plan.")
 		m.msgSub = cc.EventBus.Subscribe(bus.TopicAgentMessage)
+		m.toolSub = cc.EventBus.Subscribe(bus.TopicStreamToolCall)
 	}
 	// Small intro line inside the UI (kept minimal; avoids printing to stdout).
 	m.history = append(m.history, chatEntry{
@@ -205,14 +214,17 @@ func runChatTUI(ctx context.Context, m chatModel, cancel context.CancelFunc) err
 	_, err := p.Run()
 
 	// Unsubscribe bus subscriptions so blocked Cmd goroutines (waitForPlanEvent,
-	// waitForAgentMsg) unblock and exit. Without this, the goroutines and bus
-	// references leak after every TUI exit.
+	// waitForAgentMsg, waitForToolCall) unblock and exit. Without this, the
+	// goroutines and bus references leak after every TUI exit.
 	if m.cc.EventBus != nil {
 		if m.planSub != nil {
 			m.cc.EventBus.Unsubscribe(m.planSub)
 		}
 		if m.msgSub != nil {
 			m.cc.EventBus.Unsubscribe(m.msgSub)
+		}
+		if m.toolSub != nil {
+			m.cc.EventBus.Unsubscribe(m.toolSub)
 		}
 	}
 
@@ -233,6 +245,9 @@ func (m chatModel) Init() tea.Cmd {
 	}
 	if m.msgSub != nil {
 		cmds = append(cmds, waitForAgentMsg(m.msgSub))
+	}
+	if m.toolSub != nil {
+		cmds = append(cmds, waitForToolCall(m.toolSub))
 	}
 	return tea.Batch(cmds...)
 }
@@ -277,6 +292,25 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if m.msgSub != nil {
 			cmd = waitForAgentMsg(m.msgSub)
+		}
+		return m, cmd
+
+	case toolCallMsg:
+		now := time.Now()
+		label := msg.event.ToolName
+		if msg.event.AgentID != "" {
+			label = fmt.Sprintf("@%s %s", msg.event.AgentID, msg.event.ToolName)
+		}
+		m.activityFeed.Add(ActivityItem{
+			ID:        fmt.Sprintf("tool-%s-%d", msg.event.ToolName, now.UnixNano()),
+			Icon:      ">>",
+			Message:   label,
+			StartedAt: now,
+			DoneAt:    &now,
+		})
+		var cmd tea.Cmd
+		if m.toolSub != nil {
+			cmd = waitForToolCall(m.toolSub)
 		}
 		return m, cmd
 
@@ -366,7 +400,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if agentID != "" && m.cc.Switcher != nil {
 					brain, name, emoji, err := m.cc.Switcher.SwitchAgent(agentID)
 					if err != nil {
-						m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error: %v", err)})
+						m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error: %s", humanError(err))})
 					} else {
 						m.cc.Brain = brain
 						m.cc.AgentName = name
@@ -669,7 +703,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.history) > 0 && m.history[len(m.history)-1].text == "" {
 			m.history = m.history[:len(m.history)-1]
 		}
-		m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error: %v", msg.err)})
+		m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error: %s", humanError(msg.err))})
 		return m, nil
 
 	case brainReplyMsg:
@@ -679,7 +713,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.ctx.Err() != nil {
 				return m, tea.Quit
 			}
-			m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error: %v", msg.err)})
+			m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error: %s", humanError(msg.err))})
 			return m, nil
 		}
 
@@ -1058,6 +1092,23 @@ func waitForAgentMsg(sub *bus.Subscription) tea.Cmd {
 				continue // skip non-matching payloads
 			}
 			return agentMsgEventMsg{event: msg}
+		}
+	}
+}
+
+// waitForToolCall blocks until a tool call event arrives on the subscription channel.
+func waitForToolCall(sub *bus.Subscription) tea.Cmd {
+	return func() tea.Msg {
+		for {
+			event, ok := <-sub.Ch()
+			if !ok {
+				return nil // channel closed
+			}
+			tc, ok := event.Payload.(bus.StreamToolCallEvent)
+			if !ok {
+				continue // skip non-matching payloads
+			}
+			return toolCallMsg{event: tc}
 		}
 	}
 }

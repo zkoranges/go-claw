@@ -83,6 +83,43 @@ func TestCheckNetwork_UnknownProvider(t *testing.T) {
 	}
 }
 
+func TestCheckAPIKey_NilConfig(t *testing.T) {
+	result := checkAPIKey(context.Background(), nil)
+	if result.Status != "SKIP" {
+		t.Fatalf("expected SKIP for nil config, got %s", result.Status)
+	}
+}
+
+func TestCheckAPIKey_DefaultGoogle(t *testing.T) {
+	cfg := &config.Config{}
+	t.Setenv("GEMINI_API_KEY", "")
+
+	result := checkAPIKey(context.Background(), cfg)
+	if result.Status != "WARN" {
+		t.Fatalf("expected WARN when GEMINI_API_KEY empty, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckAPIKey_GoogleSet(t *testing.T) {
+	cfg := &config.Config{}
+	t.Setenv("GEMINI_API_KEY", "test-key")
+
+	result := checkAPIKey(context.Background(), cfg)
+	if result.Status != "PASS" {
+		t.Fatalf("expected PASS when GEMINI_API_KEY set, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckAPIKey_OllamaNoKeyNeeded(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.LLM.Provider = "ollama"
+
+	result := checkAPIKey(context.Background(), cfg)
+	if result.Status != "PASS" {
+		t.Fatalf("expected PASS for ollama (no key needed), got %s: %s", result.Status, result.Message)
+	}
+}
+
 func TestCheckNetwork_CanceledContext(t *testing.T) {
 	cfg := &config.Config{}
 

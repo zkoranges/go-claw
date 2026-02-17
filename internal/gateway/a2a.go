@@ -69,7 +69,7 @@ func (s *Server) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 		Description:        "Multi-agent runtime with durable task execution",
 		URL:                fmt.Sprintf("http://localhost:%d", 18789), // Default port
 		Version:            "v0.4",
-		Capabilities:       Capabilities{StateTransitionHistory: true},
+		Capabilities:       Capabilities{Streaming: true, StateTransitionHistory: true},
 		DefaultInputModes:  []string{"text"},
 		DefaultOutputModes: []string{"text"},
 		Skills:             skills,

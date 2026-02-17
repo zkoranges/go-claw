@@ -2,15 +2,15 @@
 
 **Vision**: The Ollama of multi-agent AI. One binary, terminal-native, persistent AI specialists that know your project.
 
-**Current state**: v0.2-dev. Core daemon works. Multi-agent TUI, multi-provider LLM, SQLite persistence, WebSocket API, inter-agent messaging, policy engine, WASM skills, Telegram, cron, delegation plumbing, DAG executor. 556+ tests passing.
+**Current state**: v0.5-dev. Core daemon works. Multi-agent TUI, multi-provider LLM (Gemini, Anthropic, OpenAI, Ollama), SQLite persistence, WebSocket API, inter-agent messaging, policy engine, WASM skills, Telegram, cron, delegation, DAG executor, MCP client, streaming responses, agent loops with checkpoints, structured output validation, OpenTelemetry instrumentation, gateway security (auth + rate limiting + CORS), async delegation, Telegram HITL gates, A2A endpoint, context pinning, auto-memory, shared team knowledge. 838+ tests passing across 29 packages.
 
 ---
 
-## v0.2 — The Happy Path
+## v0.2 — The Happy Path [COMPLETE]
 
 **Theme**: First-run experience that works. Install, type `@coder fix this bug`, get value.
 
-**Duration**: 2-3 weeks
+**Status**: Implemented in PDR-v5. @mentions, starter agents, Ctrl+N modal, `goclaw pull`, activity feed.
 
 ### @Mentions
 - `@agent` routes single message to agent, `@@agent` switches sticky context
@@ -55,11 +55,11 @@
 
 ---
 
-## v0.3 — Context and Memory
+## v0.3 — Context and Memory [COMPLETE]
 
 **Theme**: Agents that know what you're working on and remember what you've decided.
 
-**Duration**: 3-4 weeks
+**Status**: Implemented in PDR-v6. Context pinning, agent memory, auto-memory, shared team knowledge, error-as-input retry, context budget display.
 
 ### Context Pinning
 - `/pin main.go utils.go config/` — read files into agent context
@@ -101,11 +101,11 @@
 
 ---
 
-## v0.4 — Tools and Reach
+## v0.4 — Tools and Reach [COMPLETE]
 
 **Theme**: Agents that touch real systems and are reachable everywhere.
 
-**Duration**: 3-4 weeks
+**Status**: Implemented in PDR-v7. MCP client (per-agent), Telegram deep integration (HITL gates, plan progress, alerts), async delegation, A2A protocol endpoint.
 
 ### MCP Client (First Class)
 - MCP client exists — promote to primary tool integration path
@@ -138,18 +138,49 @@
 
 ---
 
-## v0.5 — Autonomy
+## v0.5 — Streaming and Autonomy [COMPLETE]
 
-**Theme**: Agents that plan, adapt, and work while you're away.
+**Theme**: Real-time streaming, autonomous agent loops, production observability.
 
-**Duration**: 4-6 weeks
+**Status**: Implemented in PDR-v8. All 5 features shipped.
+
+### Streaming Responses
+- SSE endpoint (`/api/v1/task/stream`) for real-time token delivery
+- OpenAI-compatible streaming in chat completions endpoint
+- Telegram progressive message editing during generation
+- Bus events for stream lifecycle (stream.started, stream.chunk, stream.done)
+
+### Agent Loops with Checkpoints
+- LoopRunner with configurable iteration budgets and termination keywords
+- Loop checkpoints persisted to SQLite (schema v14) for crash recovery
+- `checkpoint_now` and `set_loop_status` tools for agent self-management
+
+### Structured Output and Validation
+- JSON Schema validation via santhosh-tekuri/jsonschema
+- `extractJSON` extracts JSON from mixed LLM output
+- `ValidateAndRetry` automatically re-prompts on schema violations
+
+### OpenTelemetry Integration
+- Provider with Init/Shutdown (otlp-http + none exporters)
+- Span helpers (StartSpan, StartServerSpan, StartClientSpan)
+- 10 metric instruments (histograms, counters, up-down counters)
+- Zero overhead when telemetry disabled
+
+### Gateway Security
+- API key authentication middleware (Bearer, X-API-Key, query param)
+- Token bucket rate limiter with per-key isolation
+- CORS middleware with configurable origins
+- All disabled by default (backward compatible)
+
+---
+
+## v0.6+ — Future
 
 ### LLM-Generated Plans (Pattern 4)
 - New tool: `create_plan` — agent generates DAG from natural language
 - Planning prompt with decomposition examples
 - Agent selects targets by capability match
 - Human approval gate before execution (configurable: auto/approve/review)
-- "Review this PR" → agent builds research + security + code + docs pipeline
 
 ### Smart Routing
 - System suggests best agent for a task based on capability matching
@@ -211,15 +242,13 @@
 
 ## Summary
 
-| Version | Theme | Hook | Duration |
-|---------|-------|------|----------|
-| **v0.2** | Happy Path | Install, `@coder fix this`, it works | 2-3 weeks |
-| **v0.3** | Context & Memory | Agent knows your project, remembers decisions | 3-4 weeks |
-| **v0.4** | Tools & Reach | Agents open PRs, read DBs, alert on Telegram | 3-4 weeks |
-| **v0.5** | Autonomy | "Review this PR" → multi-agent pipeline runs | 4-6 weeks |
-| **v1.0** | Production | Stable, documented, community ecosystem | 4-6 weeks |
-
-**Total to v1.0**: ~4-6 months
+| Version | Theme | Hook | Status |
+|---------|-------|------|--------|
+| **v0.2** | Happy Path | Install, `@coder fix this`, it works | COMPLETE |
+| **v0.3** | Context & Memory | Agent knows your project, remembers decisions | COMPLETE |
+| **v0.4** | Tools & Reach | Agents open PRs, read DBs, alert on Telegram | COMPLETE |
+| **v0.5** | Streaming & Autonomy | Real-time streaming, agent loops, OTel | COMPLETE |
+| **v1.0** | Production | Stable, documented, community ecosystem | Next |
 
 ---
 

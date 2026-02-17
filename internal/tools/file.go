@@ -95,6 +95,7 @@ func registerFileTools(g *genkit.Genkit, reg *Registry) []ai.ToolRef {
 	readFile := genkit.DefineTool(g, "read_file",
 		"Read the contents of a file at the given path. Returns the file content as text. Maximum 100KB.",
 		func(ctx *ai.ToolContext, input ReadFileInput) (ReadFileOutput, error) {
+			reg.publishToolCall(ctx, "read_file")
 			if reg.Policy == nil || !reg.Policy.AllowCapability("tools.read_file") {
 				pv := policyVersion(reg.Policy)
 				audit.Record("deny", "tools.read_file", "missing_capability", pv, "read_file")
@@ -137,6 +138,7 @@ func registerFileTools(g *genkit.Genkit, reg *Registry) []ai.ToolRef {
 	writeFile := genkit.DefineTool(g, "write_file",
 		"Write content to a file at the given path. Creates parent directories if needed. Uses atomic write.",
 		func(ctx *ai.ToolContext, input WriteFileInput) (WriteFileOutput, error) {
+			reg.publishToolCall(ctx, "write_file")
 			if reg.Policy == nil || !reg.Policy.AllowCapability("tools.write_file") {
 				pv := policyVersion(reg.Policy)
 				audit.Record("deny", "tools.write_file", "missing_capability", pv, "write_file")
@@ -179,6 +181,7 @@ func registerFileTools(g *genkit.Genkit, reg *Registry) []ai.ToolRef {
 	listDir := genkit.DefineTool(g, "list_directory",
 		"List the contents of a directory. Returns file names, types, and sizes. Maximum 200 entries.",
 		func(ctx *ai.ToolContext, input ListDirectoryInput) (ListDirectoryOutput, error) {
+			reg.publishToolCall(ctx, "list_directory")
 			if reg.Policy == nil || !reg.Policy.AllowCapability("tools.read_file") {
 				pv := policyVersion(reg.Policy)
 				audit.Record("deny", "tools.read_file", "missing_capability", pv, "list_directory")
@@ -226,6 +229,7 @@ func registerFileTools(g *genkit.Genkit, reg *Registry) []ai.ToolRef {
 	editFile := genkit.DefineTool(g, "edit_file",
 		"Edit a file by replacing old_text with new_text. The old_text must appear exactly once in the file.",
 		func(ctx *ai.ToolContext, input EditFileInput) (EditFileOutput, error) {
+			reg.publishToolCall(ctx, "edit_file")
 			if reg.Policy == nil || !reg.Policy.AllowCapability("tools.write_file") {
 				pv := policyVersion(reg.Policy)
 				audit.Record("deny", "tools.write_file", "missing_capability", pv, "edit_file")

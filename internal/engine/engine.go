@@ -525,6 +525,9 @@ func (e *Engine) streamChatTask(ctx context.Context, agentID, sessionID, content
 
 	taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
 	defer cancel()
+	// Propagate task_id and agent_id so tools (and bus events) are scoped correctly.
+	taskCtx = shared.WithTaskID(taskCtx, taskID)
+	taskCtx = shared.WithAgentID(taskCtx, agentID)
 
 	if e.proc == nil {
 		_, _ = e.store.HandleTaskFailure(bgCtx, taskID, "processor not initialized for streaming")

@@ -1,13 +1,16 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/basket/go-claw/internal/bus"
 	"github.com/basket/go-claw/internal/shared"
 	"github.com/basket/go-claw/internal/tokenutil"
 	"github.com/google/uuid"
@@ -29,11 +32,7 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if len(req.Tools) > 0 {
-		s.openAIError(w, http.StatusBadRequest, "invalid_request_error",
-			"Tools are not supported in GoClaw v0.1. Function calling will be added in a future release.")
-		return
-	}
+	// Tools field is accepted but ignored — tools run autonomously via Genkit.
 
 	// 1. Route to agent by model prefix (needed before session ID generation).
 	agentID := "default"
@@ -65,9 +64,6 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 	prompt := lastMsg.Content
 
 	// 4. Seed prior messages into session history so the Brain sees full context.
-	// The OpenAI API is stateless (client sends full history each request), but
-	// GoClaw's Brain loads history from the DB. We reconcile by ensuring all
-	// prior messages exist in the session before dispatching the new prompt.
 	if err := s.cfg.Store.EnsureSession(r.Context(), sessionID); err != nil {
 		s.openAIError(w, http.StatusInternalServerError, "internal_error", "session init: "+err.Error())
 		return
@@ -79,75 +75,192 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// 5. Create Task
+	// 5. Build context with trace ID and sampling config.
 	traceID := shared.NewTraceID()
 	ctx := shared.WithTraceID(r.Context(), traceID)
 
+	// Pass sampling parameters through to the Brain via context.
+	if req.Temperature != nil || req.TopP != nil || req.TopK != nil || req.MaxTokens != nil || len(req.Stop) > 0 {
+		sc := &shared.SamplingConfig{
+			Temperature:     req.Temperature,
+			TopP:            req.TopP,
+			TopK:            req.TopK,
+			MaxOutputTokens: req.MaxTokens,
+			StopSequences:   req.Stop,
+		}
+		ctx = shared.WithSamplingConfig(ctx, sc)
+	}
+
+	promptTokens := tokenutil.EstimateTokens(prompt)
+
 	// Stream vs Non-Stream
 	if req.Stream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		_, err := s.cfg.Registry.StreamChatTask(ctx, agentID, sessionID, prompt, func(chunk string) error {
-			resp := ChatCompletionResponse{
-				ID:      "chatcmpl-" + traceID,
-				Object:  "chat.completion.chunk",
-				Created: time.Now().Unix(),
-				Model:   req.Model,
-				Choices: []ChatCompletionChoice{
-					{
-						Index: 0,
-						Message: ChatCompletionMessage{
-							Role:    "assistant",
-							Content: chunk,
-						},
-						FinishReason: "", // null for chunks
-					},
-				},
-			}
-			b, _ := json.Marshal(resp)
-			fmt.Fprintf(w, "data: %s\n\n", string(b))
-			w.(http.Flusher).Flush()
-			return nil
-		})
-
-		if err != nil {
-			// If error occurs during stream start, we might have already sent headers.
-			// Ideally we send an error chunk?
-			slog.Error("openai stream error", "error", err)
-		}
-
-		// Send [DONE]
-		fmt.Fprintf(w, "data: [DONE]\n\n")
+		s.handleOpenAIStream(w, ctx, req, agentID, sessionID, prompt, traceID, promptTokens)
 		return
 	}
 
-	// Non-streaming
-	// We need to wait for the task to complete.
-	// engine.CreateChatTask creates it async.
-	// We need a synchronous wait helper or use the engine directly?
-	// The Engine struct has `CreateChatTask` which returns taskID.
-	// It does NOT wait.
-	// To support sync API, we need to poll the store for the result.
+	// Non-streaming path
+	s.handleOpenAINonStream(w, ctx, req, agentID, sessionID, prompt, promptTokens)
+}
 
+// handleOpenAIStream handles the SSE streaming path for chat completions.
+func (s *Server) handleOpenAIStream(w http.ResponseWriter, ctx context.Context, req ChatCompletionRequest, agentID, sessionID, prompt, traceID string, promptTokens int) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.openAIError(w, http.StatusInternalServerError, "internal_error", "streaming not supported")
+		return
+	}
+
+	var mu sync.Mutex
+	completionTokens := 0
+
+	writeSSE := func(resp ChatCompletionResponse) {
+		b, _ := json.Marshal(resp)
+		mu.Lock()
+		fmt.Fprintf(w, "data: %s\n\n", string(b))
+		flusher.Flush()
+		mu.Unlock()
+	}
+
+	// Subscribe to tool-call events on the bus for real-time tool visibility.
+	var toolSub *bus.Subscription
+	var toolDone chan struct{}
+	if s.cfg.Bus != nil {
+		toolSub = s.cfg.Bus.Subscribe(bus.TopicStreamToolCall)
+		toolDone = make(chan struct{})
+		go func() {
+			defer close(toolDone)
+			toolCallIdx := 0
+			for {
+				select {
+				case evt, ok := <-toolSub.Ch():
+					if !ok {
+						return
+					}
+					toolEvt, ok := evt.Payload.(bus.StreamToolCallEvent)
+					if !ok {
+						continue
+					}
+					// Filter: only show tool calls for this request's agent.
+					if toolEvt.AgentID != "" && toolEvt.AgentID != agentID {
+						continue
+					}
+					idx := toolCallIdx
+					toolCallIdx++
+					writeSSE(ChatCompletionResponse{
+						ID:      "chatcmpl-" + traceID,
+						Object:  "chat.completion.chunk",
+						Created: time.Now().Unix(),
+						Model:   req.Model,
+						Choices: []ChatCompletionChoice{
+							{
+								Index: 0,
+								Delta: &ChatCompletionMessage{
+									Role: "assistant",
+									ToolCalls: []ToolCall{
+										{
+											Index: idx,
+											ID:    "call_" + toolEvt.ToolName,
+											Type:  "function",
+											Function: ToolFunction{
+												Name: toolEvt.ToolName,
+											},
+										},
+									},
+								},
+							},
+						},
+					})
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	_, err := s.cfg.Registry.StreamChatTask(ctx, agentID, sessionID, prompt, func(chunk string) error {
+		tokens := tokenutil.EstimateTokens(chunk)
+		mu.Lock()
+		completionTokens += tokens
+		mu.Unlock()
+
+		writeSSE(ChatCompletionResponse{
+			ID:      "chatcmpl-" + traceID,
+			Object:  "chat.completion.chunk",
+			Created: time.Now().Unix(),
+			Model:   req.Model,
+			Choices: []ChatCompletionChoice{
+				{
+					Index: 0,
+					Delta: &ChatCompletionMessage{
+						Role:    "assistant",
+						Content: chunk,
+					},
+				},
+			},
+		})
+		return nil
+	})
+
+	// Unsubscribe from tool events and wait for goroutine to finish.
+	if toolSub != nil {
+		s.cfg.Bus.Unsubscribe(toolSub)
+		<-toolDone
+	}
+
+	if err != nil {
+		slog.Error("openai stream error", "error", err)
+	}
+
+	// Send final chunk with finish_reason and usage.
+	writeSSE(ChatCompletionResponse{
+		ID:      "chatcmpl-" + traceID,
+		Object:  "chat.completion.chunk",
+		Created: time.Now().Unix(),
+		Model:   req.Model,
+		Choices: []ChatCompletionChoice{
+			{
+				Index:        0,
+				Delta:        &ChatCompletionMessage{},
+				FinishReason: strPtr("stop"),
+			},
+		},
+		Usage: &Usage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      promptTokens + completionTokens,
+		},
+	})
+
+	// Send [DONE]
+	mu.Lock()
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+	mu.Unlock()
+}
+
+// handleOpenAINonStream handles the synchronous (polling) path for chat completions.
+func (s *Server) handleOpenAINonStream(w http.ResponseWriter, ctx context.Context, req ChatCompletionRequest, agentID, sessionID, prompt string, promptTokens int) {
 	taskID, err := s.cfg.Registry.CreateChatTask(ctx, agentID, sessionID, prompt)
 	if err != nil {
 		s.openAIError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
 
-	// Poll for completion (with timeout)
-	timeout := 60 * time.Second // Default timeout for sync requests
+	// Poll for completion — no artificial timeout.
+	// The request context (ctx) cancels when the client disconnects;
+	// the engine's task_timeout_seconds protects against runaway tasks.
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	timeoutTimer := time.NewTimer(timeout)
-	defer timeoutTimer.Stop()
 
 	for {
 		select {
-		case <-timeoutTimer.C:
-			s.openAIError(w, http.StatusGatewayTimeout, "timeout", "Task timed out")
+		case <-ctx.Done():
+			s.openAIError(w, http.StatusGatewayTimeout, "client_disconnected", "Client closed connection")
 			return
 		case <-ticker.C:
 			task, err := s.cfg.Store.GetTask(ctx, taskID)
@@ -155,7 +268,6 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 				continue
 			}
 			if task.Status == "SUCCEEDED" {
-				// Parse result
 				var resPayload struct {
 					Reply string `json:"reply"`
 				}
@@ -163,9 +275,10 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 				if json.Unmarshal([]byte(task.Result), &resPayload) == nil {
 					reply = resPayload.Reply
 				} else {
-					reply = task.Result // Fallback
+					reply = task.Result
 				}
 
+				completionTokens := tokenutil.EstimateTokens(reply)
 				resp := ChatCompletionResponse{
 					ID:      "chatcmpl-" + taskID,
 					Object:  "chat.completion",
@@ -174,15 +287,17 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 					Choices: []ChatCompletionChoice{
 						{
 							Index: 0,
-							Message: ChatCompletionMessage{
+							Message: &ChatCompletionMessage{
 								Role:    "assistant",
 								Content: reply,
 							},
-							FinishReason: "stop",
+							FinishReason: strPtr("stop"),
 						},
 					},
-					Usage: Usage{
-						TotalTokens: tokenutil.EstimateTokens(prompt) + tokenutil.EstimateTokens(reply),
+					Usage: &Usage{
+						PromptTokens:     promptTokens,
+						CompletionTokens: completionTokens,
+						TotalTokens:      promptTokens + completionTokens,
 					},
 				}
 				w.Header().Set("Content-Type", "application/json")
@@ -231,12 +346,28 @@ func (s *Server) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) openAIError(w http.ResponseWriter, status int, code, message string) {
+	// Derive the error type from HTTP status per OpenAI spec.
+	errType := "server_error"
+	switch {
+	case status == http.StatusBadRequest, status == http.StatusMethodNotAllowed:
+		errType = "invalid_request_error"
+	case status == http.StatusUnauthorized:
+		errType = "authentication_error"
+	case status == http.StatusForbidden:
+		errType = "permission_error"
+	case status == http.StatusNotFound:
+		errType = "not_found_error"
+	case status == http.StatusTooManyRequests:
+		errType = "rate_limit_error"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	errResp := map[string]any{
 		"error": map[string]any{
 			"message": message,
-			"type":    code,
+			"type":    errType,
+			"param":   nil,
 			"code":    code,
 		},
 	}
@@ -244,3 +375,5 @@ func (s *Server) openAIError(w http.ResponseWriter, status int, code, message st
 		slog.Warn("openai: failed to write error response", "error", err)
 	}
 }
+
+func strPtr(s string) *string { return &s }

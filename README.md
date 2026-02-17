@@ -53,7 +53,8 @@ Most agent frameworks treat task execution as ephemeral — if the process dies,
 
 - **Multi-agent support.** Named agents with independent brains, worker pools, and task queues. Define them in `config.yaml` and hot-reload at runtime.
 - **Interactive TUI.** Chat, agent switching (`/agent`), skill management, model selection — built with [Bubbletea](https://github.com/charmbracelet/bubbletea).
-- **Multi-channel input.** Telegram bot (with `@agent` routing), OpenAI-compatible `/v1/chat/completions` endpoint, ACP WebSocket gateway (JSON-RPC 2.0).
+- **OpenAI-compatible API.** Drop-in `/v1/chat/completions` endpoint with streaming (SSE), sampling parameters (`temperature`, `top_p`, `max_tokens`, `stop`), structured output (`response_format`), real-time tool-call visibility in streaming chunks, and split `usage` reporting. Works with the Python `openai` SDK, `curl`, IDE plugins, and any OpenAI-compatible client. Agent routing via `model: "agent:<id>"`.
+- **Multi-channel input.** Telegram bot (with `@agent` routing), ACP WebSocket gateway (JSON-RPC 2.0), OpenAI-compatible REST API.
 - **Cron scheduler.** Recurring tasks with standard 5-field cron expressions.
 - **Observability.** Structured JSON logs, dual-write audit (file + DB), `/healthz` and `/metrics` endpoints.
 
@@ -62,7 +63,7 @@ Most agent frameworks treat task execution as ephemeral — if the process dies,
 - **Persistent personal assistant.** A local agent that stays running, remembers context across sessions, and acts on scheduled tasks — without depending on a cloud service.
 - **Agent teams.** Specialized agents (researcher, coder, reviewer) each with their own LLM provider, system prompt, and tool access. Route tasks via ACP, Telegram, or the TUI.
 - **Unattended automation.** Queue work and walk away. Cron triggers, heartbeat monitoring, retry-with-backoff. Failures dead-letter instead of disappearing.
-- **Self-hosted AI gateway.** OpenAI-compatible endpoint backed by any provider, with policy controls and audit logging that upstream APIs don't offer.
+- **Self-hosted AI gateway.** Full OpenAI-compatible API backed by any provider, with streaming tool visibility, sampling parameter passthrough, structured output, policy controls, and audit logging that upstream APIs don't offer.
 - **WASM skill sandbox.** Develop skills with memory limits and fault quarantine. Hot-reload during development. A buggy skill can't take down the daemon.
 - **Local MCP host.** Connect MCP servers (stdio or SSE) and expose their tools through a policy-controlled interface.
 
@@ -109,6 +110,49 @@ just test           # go test ./... -count=1
 just check          # build + vet + test
 ```
 
+## OpenAI-compatible API
+
+GoClaw exposes a full OpenAI-compatible endpoint at `POST /v1/chat/completions`. Use it with any OpenAI SDK client, `curl`, or IDE plugin.
+
+**Basic request:**
+
+```bash
+curl http://127.0.0.1:18789/v1/chat/completions \
+  -H "Authorization: Bearer $(cat ~/.goclaw/auth.token)" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"goclaw-v1","messages":[{"role":"user","content":"hello"}]}'
+```
+
+**With sampling parameters and streaming:**
+
+```bash
+curl -N http://127.0.0.1:18789/v1/chat/completions \
+  -H "Authorization: Bearer $(cat ~/.goclaw/auth.token)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "agent:researcher",
+    "messages": [{"role": "user", "content": "search for Go 1.24 features"}],
+    "stream": true,
+    "temperature": 0.7,
+    "max_tokens": 500
+  }'
+```
+
+**With Python `openai` SDK:**
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:18789/v1", api_key="your-auth-token")
+resp = client.chat.completions.create(
+    model="agent:coder",
+    messages=[{"role": "user", "content": "write a fibonacci function in Go"}],
+    temperature=0.3,
+)
+print(resp.choices[0].message.content)
+```
+
+**Supported features:** `temperature`, `top_p`, `max_tokens`, `stop`, `stream`, `response_format`, `user`, `tools` (accepted, ignored — tools run autonomously). Streaming responses include real-time `tool_calls` deltas and per-chunk `usage` reporting. Agent routing via `model: "agent:<id>"`. Models listed at `GET /v1/models`.
+
 ## Configuration
 
 All state lives under `GOCLAW_HOME` (default `~/.goclaw`):
@@ -138,7 +182,7 @@ Task delivery is at-least-once. A crash between completing work and writing succ
 
 ## Status
 
-**v0.5-dev** — 800+ tests across 29 packages. Under active development; APIs may change.
+**v0.5-dev** — 840+ tests across 29 packages. Under active development; APIs may change.
 
 | Subsystem | Status |
 |---|---|
