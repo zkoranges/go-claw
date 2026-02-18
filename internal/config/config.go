@@ -637,9 +637,16 @@ func normalize(cfg *Config) {
 // Solution: DelegationMaxHops must be <= (WorkerCount - 1) to guarantee at least 1 worker always free.
 // Equivalently: DelegationMaxHops < WorkerCount when DelegationMaxHops is strictly less.
 func validateDelegation(cfg *Config) error {
-	// Set default if not configured
+	// Set default if not configured, capped to worker_count-1 to prevent deadlock
 	if cfg.DelegationMaxHops == 0 {
-		cfg.DelegationMaxHops = 2 // Default: max 2 hops (safe for 3+ workers)
+		maxSafe := cfg.WorkerCount - 1
+		if maxSafe < 1 {
+			maxSafe = 1
+		}
+		if maxSafe > 2 {
+			maxSafe = 2
+		}
+		cfg.DelegationMaxHops = maxSafe
 	}
 
 	// Validate per-agent worker count
