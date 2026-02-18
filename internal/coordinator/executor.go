@@ -40,16 +40,22 @@ func NewExecutor(router ChatTaskRouter, waiter *Waiter, store *persistence.Store
 }
 
 // Execute runs a plan and returns the results.
-func (e *Executor) Execute(ctx context.Context, plan *Plan, sessionID string) (*ExecutionResult, error) {
+// If executionID is non-empty, the caller owns DB lifecycle (CreatePlanExecution/CompletePlanExecution);
+// the executor only tracks steps and waves internally. If empty, the executor generates an ID and
+// manages the full DB lifecycle itself.
+func (e *Executor) Execute(ctx context.Context, plan *Plan, sessionID, executionID string) (*ExecutionResult, error) {
 	if err := plan.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid plan: %w", err)
 	}
 
-	// Generate execution ID
-	execID := uuid.New().String()
+	callerOwnsDB := executionID != ""
+	execID := executionID
+	if execID == "" {
+		execID = uuid.New().String()
+	}
 
-	// Record plan start
-	if e.store != nil {
+	// Record plan start (only if executor owns DB lifecycle)
+	if !callerOwnsDB && e.store != nil {
 		_ = e.store.CreatePlanExecution(ctx, execID, plan.Name, sessionID, len(plan.Steps))
 	}
 
@@ -60,7 +66,7 @@ func (e *Executor) Execute(ctx context.Context, plan *Plan, sessionID string) (*
 
 	order, err := topoSort(plan.Steps)
 	if err != nil {
-		if e.store != nil {
+		if !callerOwnsDB && e.store != nil {
 			_ = e.store.CompletePlanExecution(ctx, execID, "failed", 0)
 		}
 		return nil, fmt.Errorf("invalid plan: %w", err)
@@ -81,7 +87,7 @@ func (e *Executor) Execute(ctx context.Context, plan *Plan, sessionID string) (*
 			}
 		}
 		if err := e.store.InitializePlanSteps(ctx, execID, stepRecords); err != nil {
-			if e.store != nil {
+			if !callerOwnsDB && e.store != nil {
 				_ = e.store.CompletePlanExecution(ctx, execID, "failed", 0)
 			}
 			return nil, fmt.Errorf("initialize step records: %w", err)
@@ -93,7 +99,7 @@ func (e *Executor) Execute(ctx context.Context, plan *Plan, sessionID string) (*
 			continue
 		}
 		if err := e.executeWave(ctx, execID, sessionID, wave, result); err != nil {
-			if e.store != nil {
+			if !callerOwnsDB && e.store != nil {
 				_ = e.store.CompletePlanExecution(ctx, execID, "failed", result.TotalCost())
 			}
 			return result, fmt.Errorf("wave %d failed: %w", waveNum, err)
@@ -105,8 +111,8 @@ func (e *Executor) Execute(ctx context.Context, plan *Plan, sessionID string) (*
 		}
 	}
 
-	// Record completion
-	if e.store != nil {
+	// Record completion (only if executor owns DB lifecycle)
+	if !callerOwnsDB && e.store != nil {
 		_ = e.store.CompletePlanExecution(ctx, execID, "succeeded", result.TotalCost())
 	}
 

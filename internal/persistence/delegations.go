@@ -10,16 +10,16 @@ import (
 // Delegation represents an async inter-agent delegation (PDR v7 Phase 2).
 type Delegation struct {
 	ID          string
-	TaskID      string    // links to tasks table (set when task is created)
-	ParentAgent string    // agent that requested delegation
-	ChildAgent  string    // agent that executes
-	Prompt      string    // what was delegated
-	Status      string    // "queued", "running", "completed", "failed"
-	Result      *string   // output from child agent (nil until completed)
-	ErrorMsg    *string   // error message if failed (nil until failed)
+	TaskID      string  // links to tasks table (set when task is created)
+	ParentAgent string  // agent that requested delegation
+	ChildAgent  string  // agent that executes
+	Prompt      string  // what was delegated
+	Status      string  // "queued", "running", "completed", "failed"
+	Result      *string // output from child agent (nil until completed)
+	ErrorMsg    *string // error message if failed (nil until failed)
 	CreatedAt   time.Time
 	CompletedAt *time.Time
-	Injected    bool      // true once result has been injected into parent's conversation
+	Injected    bool // true once result has been injected into parent's conversation
 }
 
 // CreateDelegation stores a new delegation record.

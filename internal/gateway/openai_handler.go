@@ -64,9 +64,14 @@ func (s *Server) handleOpenAIChatCompletion(w http.ResponseWriter, r *http.Reque
 	prompt := lastMsg.Content
 
 	// 4. Seed prior messages into session history so the Brain sees full context.
+	// OpenAI API is stateless: the client sends full conversation on each request.
+	// Clear existing messages first to avoid linear duplication on repeated calls.
 	if err := s.cfg.Store.EnsureSession(r.Context(), sessionID); err != nil {
 		s.openAIError(w, http.StatusInternalServerError, "internal_error", "session init: "+err.Error())
 		return
+	}
+	if err := s.cfg.Store.ClearSessionMessages(r.Context(), sessionID, agentID); err != nil {
+		slog.Warn("openai: failed to clear session history", "error", err, "session_id", sessionID)
 	}
 	for _, msg := range req.Messages[:len(req.Messages)-1] {
 		role := strings.ToLower(msg.Role)
@@ -145,8 +150,8 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, ctx context.Context, 
 					if !ok {
 						continue
 					}
-					// Filter: only show tool calls for this request's agent.
-					if toolEvt.AgentID != "" && toolEvt.AgentID != agentID {
+					// Filter by session to isolate concurrent streams for the same agent.
+					if toolEvt.SessionID != "" && toolEvt.SessionID != sessionID {
 						continue
 					}
 					idx := toolCallIdx

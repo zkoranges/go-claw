@@ -42,8 +42,8 @@ type connection struct {
 // Manager manages multiple MCP clients with per-agent scoping (v0.4).
 type Manager struct {
 	mu       sync.RWMutex
-	global   map[string]*connection                 // name -> connection (shared)
-	perAgent map[string]map[string]*connection      // agentID -> name -> connection
+	global   map[string]*connection            // name -> connection (shared)
+	perAgent map[string]map[string]*connection // agentID -> name -> connection
 	policy   policy.Checker
 	logger   *slog.Logger
 }

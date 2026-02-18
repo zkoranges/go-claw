@@ -100,6 +100,10 @@ type Server struct {
 	approvalsMu sync.Mutex
 	approvals   map[string]*approvalRequest
 
+	// plansMu protects cfg.Plans and cfg.PlansMap from concurrent access
+	// during hot-reload. Readers (list/execute) take RLock; UpdatePlans takes Lock.
+	plansMu sync.RWMutex
+
 	// Security middleware (v0.5).
 	auth           *AuthMiddleware
 	rateLimiter    *RateLimitMiddleware
@@ -163,6 +167,15 @@ func New(cfg Config) *Server {
 		go s.consumeToolEvents(cfg.ToolsUpdated)
 	}
 	return s
+}
+
+// UpdatePlans atomically swaps the plan summaries and full plan definitions.
+// Called from the config hot-reload watcher so the gateway serves fresh data.
+func (s *Server) UpdatePlans(summaries map[string]PlanSummary, plansMap map[string]*coordinator.Plan) {
+	s.plansMu.Lock()
+	s.cfg.Plans = summaries
+	s.cfg.PlansMap = plansMap
+	s.plansMu.Unlock()
 }
 
 // StartBackgroundTasks starts background maintenance goroutines (e.g., rate limiter eviction).
@@ -958,6 +971,11 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 		if p.SessionID == "" {
 			p.SessionID = uuid.NewString()
 		}
+		// Ensure session row exists for referential integrity.
+		if err := s.cfg.Store.EnsureSession(ctx, p.SessionID); err != nil {
+			rpcErr = &rpcError{Code: ErrCodeInternal, Message: "session init: " + err.Error()}
+			break
+		}
 		sched := persistence.Schedule{
 			ID:        uuid.NewString(),
 			Name:      p.Name,
@@ -1037,6 +1055,11 @@ func (s *Server) handleRPC(ctx context.Context, c *client, req rpcRequest) *rpcR
 		}
 		if p.SessionID == "" {
 			p.SessionID = uuid.NewString()
+		}
+		// Ensure session row exists (tasks table has FK on sessions).
+		if err := s.cfg.Store.EnsureSession(ctx, p.SessionID); err != nil {
+			rpcErr = &rpcError{Code: ErrCodeInternal, Message: "session init: " + err.Error()}
+			break
 		}
 		taskID, err := s.cfg.Store.CreateSubtask(ctx, p.ParentTaskID, p.SessionID, p.Payload, p.Priority)
 		if err != nil {
@@ -1736,10 +1759,12 @@ func (s *Server) handleAPIPlans(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	s.plansMu.RLock()
 	plans := make([]PlanSummary, 0, len(s.cfg.Plans))
 	for _, p := range s.cfg.Plans {
 		plans = append(plans, p)
 	}
+	s.plansMu.RUnlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"plans": plans})
 }
@@ -1778,8 +1803,10 @@ func (s *Server) handleExecutePlan(w http.ResponseWriter, r *http.Request) {
 		sessionID = uuid.NewString()
 	}
 
-	// Validate plan exists
+	// Validate plan exists (lock protects against hot-reload races).
+	s.plansMu.RLock()
 	plan, exists := s.cfg.PlansMap[planName]
+	s.plansMu.RUnlock()
 	if !exists {
 		http.Error(w, fmt.Sprintf("plan %q not found", planName), http.StatusNotFound)
 		return
@@ -1808,10 +1835,12 @@ func (s *Server) handleExecutePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Launch async execution (fire-and-forget)
+	// Launch async execution (fire-and-forget).
+	// Gateway owns DB lifecycle: it already called CreatePlanExecution above,
+	// so pass executionID to executor to avoid a duplicate row.
 	go func() {
 		ctx := context.Background() // detached from request context
-		result, err := s.cfg.Executor.Execute(ctx, plan, sessionID)
+		result, err := s.cfg.Executor.Execute(ctx, plan, sessionID, executionID)
 		if err != nil {
 			slog.Error("plan execution failed", "execution_id", executionID, "plan", planName, "error", err)
 			_ = s.cfg.Store.CompletePlanExecution(ctx, executionID, "failed", 0)

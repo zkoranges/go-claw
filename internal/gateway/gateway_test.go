@@ -2573,6 +2573,71 @@ func TestGateway_ExecutePlan(t *testing.T) {
 	})
 }
 
+func TestGateway_UpdatePlans(t *testing.T) {
+	store := openStoreForGatewayTest(t)
+	eng := engine.New(store, engine.EchoProcessor{}, engine.Config{
+		WorkerCount:  1,
+		PollInterval: 5 * time.Millisecond,
+		TaskTimeout:  2 * time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eng.Start(runCtx)
+
+	srv := gateway.New(gateway.Config{
+		Store:     store,
+		Registry:  makeTestRegistry(store, eng),
+		Policy:    gatewayTestPolicy,
+		AuthToken: gatewayTestAuthToken,
+		PlansMap:  map[string]*coordinator.Plan{},
+		Plans:     map[string]gateway.PlanSummary{},
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// Initially no plans.
+	t.Run("initially_empty", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/plans", nil)
+		req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		defer resp.Body.Close()
+		var body map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		plans, _ := body["plans"].([]interface{})
+		if len(plans) != 0 {
+			t.Fatalf("expected 0 plans, got %d", len(plans))
+		}
+	})
+
+	// Hot-reload adds a plan.
+	srv.UpdatePlans(
+		map[string]gateway.PlanSummary{"new-plan": {Name: "new-plan", StepCount: 2, AgentIDs: []string{"default"}}},
+		map[string]*coordinator.Plan{"new-plan": {Name: "new-plan", Steps: []coordinator.PlanStep{
+			{ID: "s1", AgentID: "default", Prompt: "step1"},
+			{ID: "s2", AgentID: "default", Prompt: "step2", DependsOn: []string{"s1"}},
+		}}},
+	)
+
+	t.Run("after_update", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/plans", nil)
+		req.Header.Set("Authorization", "Bearer "+gatewayTestAuthToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		defer resp.Body.Close()
+		var body map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		plans, _ := body["plans"].([]interface{})
+		if len(plans) != 1 {
+			t.Fatalf("expected 1 plan after update, got %d", len(plans))
+		}
+	})
+}
+
 // testChatRouter is a minimal ChatTaskRouter for gateway plan execution tests.
 type testChatRouter struct {
 	store *persistence.Store

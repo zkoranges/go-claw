@@ -15,6 +15,7 @@ import (
 	"github.com/basket/go-claw/internal/shared"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/google/uuid"
 )
 
 const (
@@ -95,8 +96,14 @@ func delegateTask(ctx context.Context, input *DelegateTaskInput, store *persiste
 	if input.Prompt == "" {
 		return nil, fmt.Errorf("delegate_task: prompt must be non-empty")
 	}
-	if input.SessionID == "" {
-		return nil, fmt.Errorf("delegate_task: session_id must be non-empty")
+	// Auto-populate session_id: LLMs often provide invalid values.
+	// Fall back to caller's session from context, then generate a new UUID.
+	if _, err := uuid.Parse(input.SessionID); err != nil {
+		if ctxSession := shared.SessionID(ctx); ctxSession != "" {
+			input.SessionID = ctxSession
+		} else {
+			input.SessionID = uuid.NewString()
+		}
 	}
 
 	// If capability is specified without a specific agent, resolve it.
@@ -262,8 +269,13 @@ func delegateTaskAsync(ctx context.Context, input *AsyncDelegateTaskInput, store
 	if input.Prompt == "" {
 		return nil, fmt.Errorf("delegate_task_async: prompt must be non-empty")
 	}
-	if input.SessionID == "" {
-		return nil, fmt.Errorf("delegate_task_async: session_id must be non-empty")
+	// Auto-populate session_id: LLMs often provide invalid values.
+	if _, err := uuid.Parse(input.SessionID); err != nil {
+		if ctxSession := shared.SessionID(ctx); ctxSession != "" {
+			input.SessionID = ctxSession
+		} else {
+			input.SessionID = uuid.NewString()
+		}
 	}
 
 	// Prevent self-delegation (would deadlock).

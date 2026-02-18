@@ -12,7 +12,9 @@ func TestDetectOllamaTools_Supported(t *testing.T) {
 		if r.URL.Path != "/api/show" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		var req struct{ Model string `json:"model"` }
+		var req struct {
+			Model string `json:"model"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
@@ -55,7 +57,9 @@ func TestDetectOllamaTools_Unreachable(t *testing.T) {
 func TestDetectOllamaTools_StripsPrefix(t *testing.T) {
 	var receivedModel string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct{ Model string `json:"model"` }
+		var req struct {
+			Model string `json:"model"`
+		}
 		json.NewDecoder(r.Body).Decode(&req)
 		receivedModel = req.Model
 		json.NewEncoder(w).Encode(map[string]any{

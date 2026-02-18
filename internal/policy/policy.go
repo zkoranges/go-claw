@@ -37,10 +37,10 @@ type MCPPolicyConfig struct {
 
 // Policy is the serializable policy data.
 type Policy struct {
-	AllowDomains      []string       `yaml:"allow_domains"`
-	AllowPaths        []string       `yaml:"allow_paths"`
-	AllowCapabilities []string       `yaml:"allow_capabilities"`
-	AllowLoopback     bool           `yaml:"allow_loopback"`
+	AllowDomains      []string        `yaml:"allow_domains"`
+	AllowPaths        []string        `yaml:"allow_paths"`
+	AllowCapabilities []string        `yaml:"allow_capabilities"`
+	AllowLoopback     bool            `yaml:"allow_loopback"`
 	MCP               MCPPolicyConfig `yaml:"mcp,omitempty"` // v0.4
 }
 
@@ -53,29 +53,30 @@ func Default() Policy {
 }
 
 var knownCapabilities = map[string]struct{}{
-	"acp.read":               {},
-	"acp.mutate":             {},
-	"tools.web_search":       {},
-	"tools.read_url":         {},
-	"tools.read_file":        {},
-	"tools.write_file":       {},
-	"tools.exec":             {},
-	"tools.spawn_task":       {},
-	"tools.delegate_task":    {},
-	"tools.send_message":     {},
-	"tools.read_messages":    {},
-	"tools.memory_read":      {},
-	"tools.memory_write":     {},
-	"tools.send_alert":       {},
-	"wasm.http.get":          {},
-	"wasm.kv.set":            {},
-	"legacy.run":             {},
-	"legacy.dangerous":       {},
-	"skill.inject":           {},
-	"tools.mcp":              {},
-	"agent.create":           {},
-	"agent.remove":           {},
-	"tools.price_comparison": {},
+	"acp.read":                  {},
+	"acp.mutate":                {},
+	"tools.web_search":          {},
+	"tools.read_url":            {},
+	"tools.read_file":           {},
+	"tools.write_file":          {},
+	"tools.exec":                {},
+	"tools.spawn_task":          {},
+	"tools.delegate_task":       {},
+	"tools.delegate_task_async": {},
+	"tools.send_message":        {},
+	"tools.read_messages":       {},
+	"tools.memory_read":         {},
+	"tools.memory_write":        {},
+	"tools.send_alert":          {},
+	"wasm.http.get":             {},
+	"wasm.kv.set":               {},
+	"legacy.run":                {},
+	"legacy.dangerous":          {},
+	"skill.inject":              {},
+	"tools.mcp":                 {},
+	"agent.create":              {},
+	"agent.remove":              {},
+	"tools.price_comparison":    {},
 }
 
 func Load(path string) (Policy, error) {
@@ -199,11 +200,12 @@ func (p Policy) AllowPath(path string) bool {
 
 // AllowMCPTool checks whether agent may invoke tool on an MCP server.
 // Specificity order (highest to lowest):
-//   1. Exact agent + exact server + exact tool
-//   2. Exact agent + exact server + wildcard tool
-//   3. Exact agent + wildcard server + wildcard tool
-//   4. Wildcard agent + exact server + exact tool
-//   ... etc (most-specific rule wins)
+//  1. Exact agent + exact server + exact tool
+//  2. Exact agent + exact server + wildcard tool
+//  3. Exact agent + wildcard server + wildcard tool
+//  4. Wildcard agent + exact server + exact tool
+//     ... etc (most-specific rule wins)
+//
 // If no rule matches, falls back to default (default deny if unset).
 func (p Policy) AllowMCPTool(agentID, serverName, toolName string) bool {
 	// Default is deny unless explicitly set to "allow"

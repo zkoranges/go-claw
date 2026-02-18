@@ -118,11 +118,11 @@ func MessageDepth(ctx context.Context) int {
 
 // SamplingConfig holds per-request LLM sampling parameters.
 type SamplingConfig struct {
-	Temperature    *float64
-	TopP           *float64
-	TopK           *int
+	Temperature     *float64
+	TopP            *float64
+	TopK            *int
 	MaxOutputTokens *int
-	StopSequences  []string
+	StopSequences   []string
 }
 
 // WithSamplingConfig attaches sampling parameters to the context.

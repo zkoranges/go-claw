@@ -78,13 +78,13 @@ func TestA2A_HandleAgentCard_AgentsListedAsSkills(t *testing.T) {
 
 	// Add test agents
 	reg.CreateAgent(ctx, agent.AgentConfig{
-		AgentID:     "test-coder",
-		DisplayName: "Test Coder",
+		AgentID:      "test-coder",
+		DisplayName:  "Test Coder",
 		SkillsFilter: []string{"code", "test"},
 	})
 	reg.CreateAgent(ctx, agent.AgentConfig{
-		AgentID:     "test-researcher",
-		DisplayName: "Test Researcher",
+		AgentID:      "test-researcher",
+		DisplayName:  "Test Researcher",
 		SkillsFilter: []string{"search", "analyze"},
 	})
 

@@ -516,53 +516,52 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-
-		// Parse @mentions. Path B: all mentions use sticky switch (v0.2).
-		// TODO(v0.2.1): implement Path A single-message routing when agentID can override.
-		mention := ParseMention(line)
-		if mention.AgentID != "" {
-			// Validate agent exists
-			agentIDs := m.cc.Switcher.ListAgentIDs()
-			found := false
-			for _, id := range agentIDs {
-				if id == mention.AgentID {
-					found = true
-					break
+			// Parse @mentions. Path B: all mentions use sticky switch (v0.2).
+			// TODO(v0.2.1): implement Path A single-message routing when agentID can override.
+			mention := ParseMention(line)
+			if mention.AgentID != "" {
+				// Validate agent exists
+				agentIDs := m.cc.Switcher.ListAgentIDs()
+				found := false
+				for _, id := range agentIDs {
+					if id == mention.AgentID {
+						found = true
+						break
+					}
 				}
-			}
-			if !found {
-				available := strings.Join(agentIDs, ", @")
-				m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Unknown agent: @%s. Available: @%s", mention.AgentID, available)})
-				return m, nil
-			}
+				if !found {
+					available := strings.Join(agentIDs, ", @")
+					m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Unknown agent: @%s. Available: @%s", mention.AgentID, available)})
+					return m, nil
+				}
 
-			// Switch to target agent
-			brain, name, emoji, err := m.cc.Switcher.SwitchAgent(mention.AgentID)
-			if err != nil {
-				m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error switching to @%s: %v", mention.AgentID, err)})
-				return m, nil
-			}
-			m.cc.Brain = brain
-			m.cc.AgentName = name
-			m.cc.AgentEmoji = emoji
-			m.cc.CurrentAgent = mention.AgentID
-			if name != "" && emoji != "" {
-				m.agentPrefix = fmt.Sprintf("%s %s", emoji, name)
-			} else if name != "" {
-				m.agentPrefix = name
-			} else {
-				m.agentPrefix = mention.AgentID
-			}
+				// Switch to target agent
+				brain, name, emoji, err := m.cc.Switcher.SwitchAgent(mention.AgentID)
+				if err != nil {
+					m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Error switching to @%s: %v", mention.AgentID, err)})
+					return m, nil
+				}
+				m.cc.Brain = brain
+				m.cc.AgentName = name
+				m.cc.AgentEmoji = emoji
+				m.cc.CurrentAgent = mention.AgentID
+				if name != "" && emoji != "" {
+					m.agentPrefix = fmt.Sprintf("%s %s", emoji, name)
+				} else if name != "" {
+					m.agentPrefix = name
+				} else {
+					m.agentPrefix = mention.AgentID
+				}
 
-			// Send message if provided
-			if mention.Message == "" {
-				// Bare @agent — just switched, no message to send
-				m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Switched to agent: @%s", mention.AgentID)})
-				return m, nil
-			}
+				// Send message if provided
+				if mention.Message == "" {
+					// Bare @agent — just switched, no message to send
+					m.history = append(m.history, chatEntry{role: chatRoleSystem, text: fmt.Sprintf("Switched to agent: @%s", mention.AgentID)})
+					return m, nil
+				}
 
-			line = mention.Message // Update line to the actual message
-		}
+				line = mention.Message // Update line to the actual message
+			}
 			// User message.
 			m.history = append(m.history, chatEntry{role: chatRoleUser, text: line})
 			if m.cc.Store != nil {
@@ -682,14 +681,8 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.thinking = false
 		m.streaming = false
 		m.streamCh = nil
-		// The last history entry already has the full text from accumulated chunks.
-		// Save to persistent history.
-		if len(m.history) > 0 {
-			last := m.history[len(m.history)-1]
-			if m.cc.Store != nil && last.text != "" {
-				_ = m.cc.Store.AddHistory(m.ctx, m.sessionID, m.cc.CurrentAgent, "assistant", last.text, tokenutil.EstimateTokens(last.text))
-			}
-		}
+		// Brain.Stream already persists the assistant reply to history (brain.go:892).
+		// Do NOT call AddHistory here — that would create a duplicate row.
 		return m, nil
 
 	case streamErrorMsg:

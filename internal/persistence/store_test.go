@@ -220,6 +220,56 @@ func TestStore_HistoryRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStore_ClearSessionMessages(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+	sessionID := "a1b2c3d4-0000-0000-0000-000000000001"
+
+	if err := store.EnsureSession(ctx, sessionID); err != nil {
+		t.Fatalf("ensure session: %v", err)
+	}
+	// Seed messages.
+	for _, role := range []string{"user", "assistant", "user"} {
+		if err := store.AddHistory(ctx, sessionID, "default", role, "msg-"+role, 1); err != nil {
+			t.Fatalf("add history: %v", err)
+		}
+	}
+	// Verify they exist.
+	items, err := store.ListHistory(ctx, sessionID, "default", 100)
+	if err != nil {
+		t.Fatalf("list history: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items before clear, got %d", len(items))
+	}
+
+	// Clear.
+	if err := store.ClearSessionMessages(ctx, sessionID, "default"); err != nil {
+		t.Fatalf("clear session messages: %v", err)
+	}
+
+	// Verify empty.
+	items, err = store.ListHistory(ctx, sessionID, "default", 100)
+	if err != nil {
+		t.Fatalf("list history after clear: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items after clear, got %d", len(items))
+	}
+
+	// Add new messages after clear to verify table is intact.
+	if err := store.AddHistory(ctx, sessionID, "default", "user", "new-msg", 1); err != nil {
+		t.Fatalf("add history after clear: %v", err)
+	}
+	items, err = store.ListHistory(ctx, sessionID, "default", 100)
+	if err != nil {
+		t.Fatalf("list after re-insert: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item after re-insert, got %d", len(items))
+	}
+}
+
 func TestStore_DefaultPathUsesGoclawHome(t *testing.T) {
 	// [SPEC: SPEC-CONFIG-DIR-1] [PDR: V-4]
 	tmp := t.TempDir()

@@ -220,22 +220,22 @@ type CORSConfig struct {
 
 // AgentConfigEntry defines a named agent to create on startup.
 type AgentConfigEntry struct {
-	AgentID            string         `yaml:"agent_id"`
-	DisplayName        string         `yaml:"display_name"`
-	Provider           string         `yaml:"provider"`
-	Model              string         `yaml:"model"`
-	APIKeyEnv          string         `yaml:"api_key_env"`
-	Soul               string         `yaml:"soul"`
-	SoulFile           string         `yaml:"soul_file"`
-	WorkerCount        int            `yaml:"worker_count"`
-	TaskTimeoutSeconds int            `yaml:"task_timeout_seconds"`
-	MaxQueueDepth      int            `yaml:"max_queue_depth"`
-	SkillsFilter       []string       `yaml:"skills_filter"`
-	PreferredSearch    string         `yaml:"preferred_search"`
-	Capabilities       []string               `yaml:"capabilities,omitempty"`
-	MCPServers         []AgentMCPRef          `yaml:"mcp_servers,omitempty"`          // Per-agent MCP servers (v0.4)
-	Loop               LoopConfig             `yaml:"loop,omitempty"`                 // Agent loop config (v0.5)
-	StructuredOutput   *StructuredOutputConfig `yaml:"structured_output,omitempty"`   // Structured output config (v0.5)
+	AgentID            string                  `yaml:"agent_id"`
+	DisplayName        string                  `yaml:"display_name"`
+	Provider           string                  `yaml:"provider"`
+	Model              string                  `yaml:"model"`
+	APIKeyEnv          string                  `yaml:"api_key_env"`
+	Soul               string                  `yaml:"soul"`
+	SoulFile           string                  `yaml:"soul_file"`
+	WorkerCount        int                     `yaml:"worker_count"`
+	TaskTimeoutSeconds int                     `yaml:"task_timeout_seconds"`
+	MaxQueueDepth      int                     `yaml:"max_queue_depth"`
+	SkillsFilter       []string                `yaml:"skills_filter"`
+	PreferredSearch    string                  `yaml:"preferred_search"`
+	Capabilities       []string                `yaml:"capabilities,omitempty"`
+	MCPServers         []AgentMCPRef           `yaml:"mcp_servers,omitempty"`       // Per-agent MCP servers (v0.4)
+	Loop               LoopConfig              `yaml:"loop,omitempty"`              // Agent loop config (v0.5)
+	StructuredOutput   *StructuredOutputConfig `yaml:"structured_output,omitempty"` // Structured output config (v0.5)
 }
 
 type Config struct {
@@ -304,9 +304,9 @@ type Config struct {
 	A2A      A2AConfig          `yaml:"a2a,omitempty"`
 
 	// v0.5 config sections.
-	Streaming StreamingConfig        `yaml:"streaming,omitempty"`
-	Telemetry TelemetryConfig        `yaml:"telemetry,omitempty"`
-	Gateway   GatewaySecurityConfig  `yaml:"gateway,omitempty"`
+	Streaming StreamingConfig       `yaml:"streaming,omitempty"`
+	Telemetry TelemetryConfig       `yaml:"telemetry,omitempty"`
+	Gateway   GatewaySecurityConfig `yaml:"gateway,omitempty"`
 
 	NeedsGenesis bool `yaml:"-"`
 }

@@ -62,9 +62,10 @@ type StreamDoneEvent struct {
 
 // StreamToolCallEvent is published when a tool call starts during streaming.
 type StreamToolCallEvent struct {
-	TaskID   string `json:"task_id"`
-	AgentID  string `json:"agent_id"`
-	ToolName string `json:"tool_name"`
+	TaskID    string `json:"task_id"`
+	AgentID   string `json:"agent_id"`
+	SessionID string `json:"session_id"`
+	ToolName  string `json:"tool_name"`
 }
 
 // TaskStateChangedEvent is published when a task's state changes.

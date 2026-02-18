@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/basket/go-claw/internal/config"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // GenesisResult holds the output of the genesis wizard.

@@ -7,25 +7,25 @@ import (
 
 // ContextBudget shows the token allocation for the current context window.
 type ContextBudget struct {
-	ModelLimit      int    // model's max context (e.g., 128000)
-	OutputBuffer    int    // reserved for response (e.g., 4096)
-	Available       int    // ModelLimit - OutputBuffer
+	ModelLimit   int // model's max context (e.g., 128000)
+	OutputBuffer int // reserved for response (e.g., 4096)
+	Available    int // ModelLimit - OutputBuffer
 
-	SoulTokens      int    // system prompt
-	MemoryTokens    int    // core memory block
-	PinTokens       int    // own pinned context
-	SharedTokens    int    // shared team context
-	SummaryTokens   int    // summary of older messages
-	MessageTokens   int    // recent messages
-	TotalUsed       int    // sum of above
+	SoulTokens    int // system prompt
+	MemoryTokens  int // core memory block
+	PinTokens     int // own pinned context
+	SharedTokens  int // shared team context
+	SummaryTokens int // summary of older messages
+	MessageTokens int // recent messages
+	TotalUsed     int // sum of above
 
-	Remaining       int    // Available - TotalUsed
-	MessageCount    int    // number of recent messages
-	TruncatedCount  int    // messages summarized away
-	PinCount        int    // number of pinned items
-	SharedPinCount  int    // number of shared pins
-	MemoryCount     int    // number of memory items
-	SharedMemCount  int    // number of shared memories
+	Remaining      int // Available - TotalUsed
+	MessageCount   int // number of recent messages
+	TruncatedCount int // messages summarized away
+	PinCount       int // number of pinned items
+	SharedPinCount int // number of shared pins
+	MemoryCount    int // number of memory items
+	SharedMemCount int // number of shared memories
 }
 
 // Format returns a human-readable budget display for the user.

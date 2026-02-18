@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -177,13 +178,20 @@ func (r *Registry) CreateAgent(ctx context.Context, cfg AgentConfig) error {
 		Status:             "active",
 	}
 	if err := r.store.CreateAgent(ctx, rec); err != nil {
-		// Agent already in DB (restore path) — just update status to active.
-		_ = r.store.UpdateAgentStatus(ctx, cfg.AgentID, "active")
-		slog.Info("agent already in DB, reactivated", "agent_id", cfg.AgentID)
+		// Only treat as duplicate if it's a UNIQUE constraint violation.
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			_ = r.store.UpdateAgentStatus(ctx, cfg.AgentID, "active")
+			slog.Info("agent already in DB, reactivated", "agent_id", cfg.AgentID)
+		} else {
+			cancel()
+			eng.Drain(2 * time.Second)
+			return fmt.Errorf("create agent record: %w", err)
+		}
 	}
 
 	// Store in map. Re-check under write lock to prevent race between
 	// concurrent CreateAgent calls for the same agent_id.
+	// Capture callback and agent ref under lock so we don't read them after unlock.
 	r.mu.Lock()
 	if _, dup := r.agents[cfg.AgentID]; dup {
 		r.mu.Unlock()
@@ -191,21 +199,23 @@ func (r *Registry) CreateAgent(ctx context.Context, cfg AgentConfig) error {
 		eng.Drain(2 * time.Second)
 		return fmt.Errorf("agent %q already exists (concurrent create)", cfg.AgentID)
 	}
-	r.agents[cfg.AgentID] = &RunningAgent{
+	ra := &RunningAgent{
 		Config:    cfg,
 		Engine:    eng,
 		Brain:     brain,
 		cancel:    cancel,
 		startedAt: time.Now(),
 	}
+	r.agents[cfg.AgentID] = ra
+	cb := r.onAgentCreated
 	r.mu.Unlock()
 
 	slog.Info("agent created", "agent_id", cfg.AgentID, "provider", cfg.Provider, "workers", cfg.WorkerCount)
 
 	// Invoke provisioning hook so runtime-created agents receive skills, MCP tools,
 	// shell executor, etc. The hook is set by main.go after initial startup.
-	if r.onAgentCreated != nil {
-		r.onAgentCreated(r.agents[cfg.AgentID])
+	if cb != nil {
+		cb(ra)
 	}
 
 	return nil

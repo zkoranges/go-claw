@@ -113,7 +113,7 @@ func TestDelegateTask_InputValidation(t *testing.T) {
 	}{
 		{"empty target and capability", DelegateTaskInput{Prompt: "hi", SessionID: delegateTestSession}, "either target_agent or capability must be provided"},
 		{"empty prompt", DelegateTaskInput{TargetAgent: "b", SessionID: delegateTestSession}, "prompt must be non-empty"},
-		{"empty session", DelegateTaskInput{TargetAgent: "b", Prompt: "hi"}, "session_id must be non-empty"},
+		{"empty session auto-generates UUID", DelegateTaskInput{TargetAgent: "b", Prompt: "hi"}, "target agent \"b\" not found"},
 	}
 
 	for _, tt := range tests {
@@ -373,7 +373,7 @@ func TestDelegateTaskAsync_InputValidation(t *testing.T) {
 	}{
 		{"empty target", AsyncDelegateTaskInput{Prompt: "hi", SessionID: delegateTestSession}, "target_agent must be provided"},
 		{"empty prompt", AsyncDelegateTaskInput{TargetAgent: "b", SessionID: delegateTestSession}, "prompt must be non-empty"},
-		{"empty session", AsyncDelegateTaskInput{TargetAgent: "b", Prompt: "hi"}, "session_id must be non-empty"},
+		{"empty session auto-generates UUID", AsyncDelegateTaskInput{TargetAgent: "b", Prompt: "hi"}, "target agent \"b\" not found"},
 	}
 
 	for _, tt := range tests {

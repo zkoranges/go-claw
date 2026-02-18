@@ -21,8 +21,8 @@ type AgentSummary struct {
 func (s *Store) SaveSummary(ctx context.Context, agentID, summary string, msgCount int) error {
 	key := fmt.Sprintf("agent_summary:%s", agentID)
 	data := map[string]interface{}{
-		"summary":   summary,
-		"msg_count": msgCount,
+		"summary":    summary,
+		"msg_count":  msgCount,
 		"created_at": time.Now().Format(time.RFC3339),
 	}
 	jsonData, err := json.Marshal(data)

@@ -17,7 +17,7 @@ type LoopCheckpoint struct {
 	MaxTokens   int           `json:"max_tokens"`
 	StartedAt   time.Time     `json:"started_at"`
 	MaxDuration time.Duration `json:"-"`
-	Status      string        `json:"status"` // running, completed, budget_exceeded, timeout, failed, cancelled
+	Status      string        `json:"status"`   // running, completed, budget_exceeded, timeout, failed, cancelled
 	Messages    string        `json:"messages"` // JSON array
 	CreatedAt   time.Time     `json:"created_at"`
 	UpdatedAt   time.Time     `json:"updated_at"`

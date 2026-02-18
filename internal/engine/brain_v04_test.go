@@ -189,7 +189,6 @@ func strPtr(s string) *string {
 	return &s
 }
 
-
 func TestBrain_RegisterMCPTools(t *testing.T) {
 	t.Skip("RegisterMCPTools registers allowed tools per-agent in Phase 1")
 }

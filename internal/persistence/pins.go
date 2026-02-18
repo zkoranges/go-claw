@@ -7,16 +7,16 @@ import (
 
 // AgentPin represents a pinned file or text snippet for an agent.
 type AgentPin struct {
-	ID        int64
-	AgentID   string
-	PinType   string // 'file', 'text'
-	Source    string // filepath, URL, or label
-	Content   string
+	ID         int64
+	AgentID    string
+	PinType    string // 'file', 'text'
+	Source     string // filepath, URL, or label
+	Content    string
 	TokenCount int
-	Shared    bool
-	LastRead  time.Time
-	FileMtime string
-	CreatedAt time.Time
+	Shared     bool
+	LastRead   time.Time
+	FileMtime  string
+	CreatedAt  time.Time
 }
 
 // AddPin adds or updates a pinned file/text.

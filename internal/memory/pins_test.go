@@ -25,15 +25,15 @@ func (m *mockPinStore) AddPin(ctx context.Context, agentID, pinType, source, con
 	}
 	tokenCount := (len(content) + 3) / 4
 	m.pins[agentID][source] = persistence.AgentPin{
-		ID:        int64(len(m.pins[agentID])) + 1,
-		AgentID:   agentID,
-		PinType:   pinType,
-		Source:    source,
-		Content:   content,
+		ID:         int64(len(m.pins[agentID])) + 1,
+		AgentID:    agentID,
+		PinType:    pinType,
+		Source:     source,
+		Content:    content,
 		TokenCount: tokenCount,
-		Shared:    shared,
-		LastRead:  time.Now(),
-		CreatedAt: time.Now(),
+		Shared:     shared,
+		LastRead:   time.Now(),
+		CreatedAt:  time.Now(),
 	}
 	m.lastAction = "AddPin"
 	return m.lastError

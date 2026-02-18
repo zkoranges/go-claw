@@ -1306,6 +1306,21 @@ func (s *Store) AddHistory(ctx context.Context, sessionID, agentID, role, conten
 	return nil
 }
 
+// ClearSessionMessages deletes all messages for a session+agent pair.
+// Used by the OpenAI-compatible API to implement stateless request semantics:
+// the client provides full conversation history on each request, so we
+// replace the DB state rather than appending duplicates.
+func (s *Store) ClearSessionMessages(ctx context.Context, sessionID, agentID string) error {
+	if agentID == "" {
+		agentID = "default"
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ? AND agent_id = ?`, sessionID, agentID)
+	if err != nil {
+		return fmt.Errorf("clear session messages: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ListHistory(ctx context.Context, sessionID, agentID string, limit int) ([]HistoryItem, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100

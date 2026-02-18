@@ -1241,8 +1241,9 @@ func handlePinnedCommand(cc *ChatConfig, out io.Writer) {
 
 // handleShareCommand processes /share commands.
 // Usage: /share <key> with <agent> — Share a specific memory
-//        /share all with <agent> — Share all memories
-//        /share pin <source> with <agent> — Share a specific pin
+//
+//	/share all with <agent> — Share all memories
+//	/share pin <source> with <agent> — Share a specific pin
 func handleShareCommand(arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
@@ -1307,7 +1308,8 @@ func handleShareCommand(arg string, cc *ChatConfig, out io.Writer) {
 
 // handleUnshareCommand processes /unshare commands.
 // Usage: /unshare <key> from <agent> — Revoke a specific memory share
-//        /unshare pin <source> from <agent> — Revoke a specific pin share
+//
+//	/unshare pin <source> from <agent> — Revoke a specific pin share
 func handleUnshareCommand(arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
@@ -1405,15 +1407,15 @@ func handleContextCommand(cc *ChatConfig, out io.Writer) {
 
 	// Model limits (default to Gemini 2.5 Flash)
 	modelLimits := map[string]int{
-		"gemini-2.5-flash":  128000,
-		"gemini-2.5-pro":    128000,
-		"gemini-1.5-flash":  128000,
-		"gemini-1.5-pro":    128000,
-		"gpt-4-turbo":       128000,
-		"gpt-4":             8192,
-		"claude-opus":       200000,
-		"claude-sonnet":     200000,
-		"claude-haiku":      200000,
+		"gemini-2.5-flash": 128000,
+		"gemini-2.5-pro":   128000,
+		"gemini-1.5-flash": 128000,
+		"gemini-1.5-pro":   128000,
+		"gpt-4-turbo":      128000,
+		"gpt-4":            8192,
+		"claude-opus":      200000,
+		"claude-sonnet":    200000,
+		"claude-haiku":     200000,
 	}
 	modelName := cc.ModelName
 	if modelName == "" {
@@ -1479,22 +1481,22 @@ func handleContextCommand(cc *ChatConfig, out io.Writer) {
 
 	// Create and format budget
 	budget := &memory.ContextBudget{
-		ModelLimit:    modelLimit,
-		OutputBuffer:  outputBuffer,
-		Available:     available,
-		SoulTokens:    soulTokens,
-		MemoryTokens:  memoryTokens,
-		PinTokens:     pinTokens,
-		SharedTokens:  sharedTokens,
-		SummaryTokens: summaryTokens,
-		MessageTokens: messageTokens,
-		TotalUsed:     totalUsed,
-		Remaining:     remaining,
-		MessageCount:  messageCount,
+		ModelLimit:     modelLimit,
+		OutputBuffer:   outputBuffer,
+		Available:      available,
+		SoulTokens:     soulTokens,
+		MemoryTokens:   memoryTokens,
+		PinTokens:      pinTokens,
+		SharedTokens:   sharedTokens,
+		SummaryTokens:  summaryTokens,
+		MessageTokens:  messageTokens,
+		TotalUsed:      totalUsed,
+		Remaining:      remaining,
+		MessageCount:   messageCount,
 		TruncatedCount: truncatedCount,
-		PinCount:      pinCount,
+		PinCount:       pinCount,
 		SharedPinCount: sharedPinCount,
-		MemoryCount:   memoryCount,
+		MemoryCount:    memoryCount,
 		SharedMemCount: sharedMemCount,
 	}
 

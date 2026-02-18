@@ -44,12 +44,12 @@ func (m *AgentModal) Open() {
 	m.err = ""
 }
 
-func (m *AgentModal) Close()             { m.state = ModalClosed }
-func (m AgentModal) IsOpen() bool        { return m.state == ModalOpen }
-func (m AgentModal) FocusIndex() int     { return m.focusIndex }
-func (m AgentModal) IDField() string     { return m.idField }
-func (m AgentModal) SoulField() string   { return m.soulField }
-func (m AgentModal) Err() string         { return m.err }
+func (m *AgentModal) Close()           { m.state = ModalClosed }
+func (m AgentModal) IsOpen() bool      { return m.state == ModalOpen }
+func (m AgentModal) FocusIndex() int   { return m.focusIndex }
+func (m AgentModal) IDField() string   { return m.idField }
+func (m AgentModal) SoulField() string { return m.soulField }
+func (m AgentModal) Err() string       { return m.err }
 
 type AgentCreatedMsg struct {
 	ID, Model, Soul string

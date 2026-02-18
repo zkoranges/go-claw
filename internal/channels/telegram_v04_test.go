@@ -160,11 +160,11 @@ func TestTelegram_FormatsPlanProgress_MarkdownV2(t *testing.T) {
 func TestTelegram_ParsesPlanCommand(t *testing.T) {
 	// TDD: parsePlanCommand should extract plan name and optional input
 	tests := []struct {
-		input          string
-		expectedPlan   string
-		expectedInput  string
-		shouldFail     bool
-		name           string
+		input         string
+		expectedPlan  string
+		expectedInput string
+		shouldFail    bool
+		name          string
 	}{
 		{
 			input:         "/plan myplan",

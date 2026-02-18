@@ -2,8 +2,8 @@ package persistence
 
 import (
 	"context"
-	"time"
 	"database/sql"
+	"time"
 )
 
 const timeLayout = "2006-01-02 15:04:05"
@@ -14,7 +14,7 @@ type AgentMemory struct {
 	AgentID        string
 	Key            string
 	Value          string
-	Source         string    // 'user', 'agent', 'system'
+	Source         string // 'user', 'agent', 'system'
 	RelevanceScore float64
 	AccessCount    int
 	CreatedAt      time.Time

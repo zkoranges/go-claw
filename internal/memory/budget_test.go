@@ -8,13 +8,13 @@ import (
 func TestContextBudget_Format(t *testing.T) {
 	t.Run("format_includes_agent_and_model", func(t *testing.T) {
 		b := &ContextBudget{
-			ModelLimit:    128000,
-			OutputBuffer:  4096,
-			Available:     123904,
-			SoulTokens:    850,
-			MemoryTokens:  120,
-			TotalUsed:     970,
-			Remaining:     122934,
+			ModelLimit:   128000,
+			OutputBuffer: 4096,
+			Available:    123904,
+			SoulTokens:   850,
+			MemoryTokens: 120,
+			TotalUsed:    970,
+			Remaining:    122934,
 		}
 
 		formatted := b.Format("coder", "gemini-2.5-pro")
@@ -31,23 +31,23 @@ func TestContextBudget_Format(t *testing.T) {
 
 	t.Run("format_shows_all_components", func(t *testing.T) {
 		b := &ContextBudget{
-			ModelLimit:    128000,
-			OutputBuffer:  4096,
-			Available:     123904,
-			SoulTokens:    850,
-			MemoryTokens:  120,
-			MemoryCount:   3,
-			PinTokens:     2400,
-			PinCount:      2,
-			SharedTokens:  480,
+			ModelLimit:     128000,
+			OutputBuffer:   4096,
+			Available:      123904,
+			SoulTokens:     850,
+			MemoryTokens:   120,
+			MemoryCount:    3,
+			PinTokens:      2400,
+			PinCount:       2,
+			SharedTokens:   480,
 			SharedMemCount: 1,
 			SharedPinCount: 1,
-			SummaryTokens: 380,
+			SummaryTokens:  380,
 			TruncatedCount: 45,
-			MessageTokens: 3200,
-			MessageCount:  12,
-			TotalUsed:     7430,
-			Remaining:     116474,
+			MessageTokens:  3200,
+			MessageCount:   12,
+			TotalUsed:      7430,
+			Remaining:      116474,
 		}
 
 		formatted := b.Format("coder", "gemini-2.5-pro")

@@ -38,11 +38,11 @@ func TestEventTopics_Constants(t *testing.T) {
 
 	// Verify no duplicates among new topics
 	topics := map[string]bool{
-		TopicPlanStepFailed:          true,
-		TopicHITLApprovalRequested:   true,
-		TopicHITLApprovalResponse:    true,
-		TopicAgentAlert:              true,
-		TopicAgentMessage:            true,
+		TopicPlanStepFailed:        true,
+		TopicHITLApprovalRequested: true,
+		TopicHITLApprovalResponse:  true,
+		TopicAgentAlert:            true,
+		TopicAgentMessage:          true,
 	}
 	if len(topics) != 5 {
 		t.Fatalf("expected 5 unique new topics, got %d", len(topics))

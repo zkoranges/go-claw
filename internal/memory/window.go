@@ -27,10 +27,10 @@ type WindowMessage struct {
 
 // WindowResult is the output of BuildWindow: what messages fit + optional summary.
 type WindowResult struct {
-	Summary        string           // compressed older messages (may be empty)
-	Messages       []WindowMessage  // recent messages that fit in budget
-	TotalTokens    int              // estimated tokens used
-	TruncatedCount int              // number of messages that were dropped/summarized
+	Summary        string          // compressed older messages (may be empty)
+	Messages       []WindowMessage // recent messages that fit in budget
+	TotalTokens    int             // estimated tokens used
+	TruncatedCount int             // number of messages that were dropped/summarized
 }
 
 // BuildWindow selects messages that fit within the context window.

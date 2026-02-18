@@ -254,6 +254,8 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 	ctx = shared.WithTaskID(ctx, task.ID)
 	// Propagate agent_id so tools (send_message, read_messages) know which agent is calling.
 	ctx = shared.WithAgentID(ctx, e.agentID)
+	// Propagate session_id so delegate_task can inherit the caller's session.
+	ctx = shared.WithSessionID(ctx, task.SessionID)
 	// Extract message depth from payload for inter-agent loop prevention.
 	var probe chatTaskPayload
 	if err := json.Unmarshal([]byte(task.Payload), &probe); err == nil && probe.MessageDepth > 0 {
@@ -525,9 +527,10 @@ func (e *Engine) streamChatTask(ctx context.Context, agentID, sessionID, content
 
 	taskCtx, cancel := context.WithTimeout(ctx, e.config.TaskTimeout)
 	defer cancel()
-	// Propagate task_id and agent_id so tools (and bus events) are scoped correctly.
+	// Propagate task_id, agent_id, and session_id so tools (and bus events) are scoped correctly.
 	taskCtx = shared.WithTaskID(taskCtx, taskID)
 	taskCtx = shared.WithAgentID(taskCtx, agentID)
+	taskCtx = shared.WithSessionID(taskCtx, sessionID)
 
 	if e.proc == nil {
 		_, _ = e.store.HandleTaskFailure(bgCtx, taskID, "processor not initialized for streaming")

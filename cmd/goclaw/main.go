@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -793,6 +794,7 @@ The system runs this checklist periodically to ensure health.
 	if err := confWatcher.Start(ctx); err != nil {
 		fatalStartup(logger, "E_CONFIG_WATCHER_START", err)
 	}
+	var gwRef atomic.Pointer[gateway.Server] // atomic so hot-reload goroutine can safely call UpdatePlans
 	go func() {
 		for ev := range confWatcher.Events() {
 			logger.Info("config hot-reload event", "path", ev.Path, "op", ev.Op.String())
@@ -844,6 +846,10 @@ The system runs this checklist periodically to ensure health.
 				planSummaries, plansMap = loadPlans(newCfg.Plans, reloadAgentIDs, logger)
 				if len(planSummaries) > 0 {
 					logger.Info("plans reloaded from config", "count", len(planSummaries))
+				}
+				// Push updated plans to the gateway so it doesn't serve stale data.
+				if g := gwRef.Load(); g != nil {
+					g.UpdatePlans(planSummaries, plansMap)
 				}
 
 				// Update other config fields that may have changed.
@@ -1034,7 +1040,12 @@ The system runs this checklist periodically to ensure health.
 		PlansMap:          plansMap,
 		Executor:          executor,
 		WasmHost:          wasmHost,
+		LivePolicy:        pol,
+		HomeDir:           cfg.HomeDir,
+		Cfg:               &cfg,
+		GatewaySecurity:   cfg.Gateway,
 	})
+	gwRef.Store(gw) // publish to hot-reload goroutine (atomic, race-free)
 
 	gw.StartBackgroundTasks(ctx)
 

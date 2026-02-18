@@ -162,7 +162,7 @@ func TestExecute_TestMode(t *testing.T) {
 	}
 
 	exec := NewExecutor(router, nil, nil, nil)
-	result, err := exec.Execute(context.Background(), plan, "test-session")
+	result, err := exec.Execute(context.Background(), plan, "test-session", "")
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestExecutor_Events(t *testing.T) {
 		t.Fatalf("ensure session: %v", err)
 	}
 
-	result, err := exec.Execute(context.Background(), plan, sessionID)
+	result, err := exec.Execute(context.Background(), plan, sessionID, "")
 	if err != nil {
 		t.Fatalf("execute failed: %v", err)
 	}

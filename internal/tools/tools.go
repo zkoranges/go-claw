@@ -30,9 +30,10 @@ func (r *Registry) publishToolCall(ctx context.Context, toolName string) {
 		return
 	}
 	r.Bus.Publish(bus.TopicStreamToolCall, bus.StreamToolCallEvent{
-		TaskID:   shared.TaskID(ctx),
-		AgentID:  shared.AgentID(ctx),
-		ToolName: toolName,
+		TaskID:    shared.TaskID(ctx),
+		AgentID:   shared.AgentID(ctx),
+		SessionID: shared.SessionID(ctx),
+		ToolName:  toolName,
 	})
 }
 
