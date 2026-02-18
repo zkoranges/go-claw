@@ -5,9 +5,9 @@
 [![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Run AI agents locally with crash recovery, tool access, and zero cloud dependencies.**
+**Run AI agent teams locally with crash recovery, tool access, and zero cloud dependencies.**
 
-GoClaw is a single-binary daemon that queues agent tasks in SQLite, executes them through LLM providers (Gemini, Claude, GPT, OpenRouter, Ollama), and guarantees nothing is silently lost — even if you `kill -9` the process mid-task. Orphaned work is automatically recovered on restart.
+GoClaw is a single-binary daemon that queues agent tasks in SQLite, executes them through any LLM provider, and guarantees nothing is silently lost — even if you `kill -9` the process mid-task.
 
 ```
 $ goclaw
@@ -20,67 +20,87 @@ coder — gemini-2.5-pro
 
 ## Why
 
-Most agent frameworks treat task execution as ephemeral — if the process dies, queued and in-flight work disappears. GoClaw treats agent tasks like a database treats transactions: every state change is persisted before it's acknowledged. Built on [Firebase Genkit](https://github.com/firebase/genkit) for structured tool-use orchestration and Go's goroutine-based concurrency for parallel execution across worker pools.
+Agent frameworks treat tasks as ephemeral — crash and your work vanishes. GoClaw persists every state change before acknowledging it, like a database transaction. Orphaned work is automatically recovered on restart.
 
 ## Features
 
-### Core
+**Durable by default.** SQLite WAL task queue with lease-based ownership. 8-state task machine (QUEUED through DEAD_LETTER). Every transition is transactional with an append-only audit trail. Crash recovery on restart.
 
-- **Durable task queue.** SQLite WAL with lease-based ownership. Tasks survive crashes. Orphaned work is automatically reclaimed on restart.
-- **8-state task machine.** QUEUED → CLAIMED → RUNNING → SUCCEEDED/FAILED/RETRY_WAIT/CANCELED → DEAD_LETTER. Every transition is transactional with an append-only audit trail.
-- **Multi-provider LLM brain.** Gemini (default), Anthropic, OpenAI, OpenRouter, Ollama — with automatic failover. Tool calls are schema-validated before execution. Ollama models auto-detect tool support via `/api/show`. Switch providers at runtime via `/model`.
-- **Context compaction.** When conversation history approaches the context window, older messages are summarized via LLM and archived. Recent messages stay intact.
-- **@Mentions.** Route messages to specific agents with `@coder <msg>` syntax. Sticky agent switching with `@agent` shorthand.
-- **Starter agents.** Three built-in agents (coder, researcher, writer) available on first run. Create custom agents via Ctrl+N or pull from URLs with `goclaw pull`.
-- **Community agent library.** `goclaw pull <url>` fetches agent configs from any HTTPS URL, validates them, and adds to your local setup.
+**Multi-provider LLM.** Gemini, Anthropic, OpenAI, OpenRouter, Ollama — switch at runtime via `/model`. Ollama models auto-detect tool support. No API key needed for local models.
 
-### Context & Memory (v0.3)
+**Agent teams.** Named agents with independent brains, worker pools, and task queues. Inter-agent delegation with hop counting and deadlock prevention. Memory sharing across agents. `@mentions` for routing.
 
-- **Conversation history.** Auto-compaction of old messages with LLM summarization. Token counts tracked and displayed via `/context`.
-- **Core memory.** Persistent facts stored per agent via `/remember <key> <value>` and `/memory` commands. Relevance decay over time.
-- **Pinned context.** Pin files or text snippets for ongoing use. File watcher detects changes and auto-updates pins. Useful for code, docs, and specs.
-- **Agent memory sharing.** `/share <memory> with <agent>` — broadcast memories to teammates. Wildcard shares (`/share all with @writer`) grant team-wide access.
-- **Executor retry with error context.** Failed plan steps automatically retry with the previous error injected as context. Agents see what broke and why.
-- **Context budget visibility.** `/context` command shows token allocation across soul, memory, pins, shared context, summaries, and messages. Know when you're running low.
+**Context and memory.** Conversation compaction via LLM summarization. Persistent core memory per agent. Pin files or text with auto-update on change. Relevance decay over time. Token budget visibility via `/context`.
 
-### Tools & Integration (v0.4)
+**OpenAI-compatible API.** Drop-in `/v1/chat/completions` with streaming, sampling parameters, structured output, and tool-call visibility. Route to agents via `model: "agent:<id>"`. Works with the Python `openai` SDK, `curl`, and any compatible client.
 
-- **MCP client.** Per-agent MCP server connections (stdio + SSE transport) with policy-controlled tool discovery. Define servers per agent in `config.yaml`.
-- **Inter-agent delegation.** `delegate_task` tool for blocking task handoff between agents with hop counting, deadlock prevention, and capability-based routing.
-- **A2A protocol.** `GET /.well-known/agent.json` endpoint for agent-to-agent discovery and interoperability.
-- **Telegram deep integration.** Human-in-the-loop approval gates, plan progress updates, and alert tool for proactive notifications.
+**Tools and integrations.** MCP client (stdio + SSE, per-agent policy control). Built-in shell, filesystem, web search, process spawning. WASM skill sandbox with memory limits and quarantine. Telegram bot with human-in-the-loop gates.
 
-### Streaming & Autonomy (v0.5)
+**Streaming and autonomy.** SSE endpoint for real-time token delivery. Agent loops with configurable budgets, termination keywords, and crash-recovery checkpoints. Structured JSON output with schema validation and auto-retry.
 
-- **Streaming responses.** SSE endpoint (`/api/v1/task/stream`) for real-time token delivery. OpenAI-compatible streaming with tool-call deltas. Telegram progressive message editing during generation.
-- **Agent loops.** Autonomous iteration with configurable budgets (token, step, iteration), termination keywords, and crash-recovery checkpoints persisted to SQLite.
-- **Structured output.** JSON Schema validation with `extractJSON` for mixed LLM output and `ValidateAndRetry` for automatic re-prompting on schema violations.
-- **OpenTelemetry.** Traces and 10 metric instruments (histograms, counters, up-down counters) with configurable OTLP exporters. Zero overhead when disabled.
-- **Gateway security.** API key authentication (Bearer, X-API-Key, query param), per-key token bucket rate limiting, and configurable CORS. All disabled by default.
-
-### Safety and control
-
-- **Default-deny policy engine.** Capability-based access control with domain allowlists. Hot-reloads via fsnotify; invalid config fails closed.
-- **WASM skill sandbox.** Memory limits, CPU fuel metering, execution timeouts, fault-count quarantine, and two-phase hot reload with rollback. Powered by [wazero](https://wazero.io) (pure Go, no CGo).
-- **Built-in tools.** Shell execution (with optional Docker sandboxing), filesystem ops, web search (Brave / Perplexity / DuckDuckGo), MCP client, process spawning.
-
-### Operations
-
-- **Multi-agent support.** Named agents with independent brains, worker pools, and task queues. Define them in `config.yaml` and hot-reload at runtime.
-- **Interactive TUI.** Chat, agent switching (`/agent`), skill management, model selection — built with [Bubbletea](https://github.com/charmbracelet/bubbletea).
-- **OpenAI-compatible API.** Drop-in `/v1/chat/completions` endpoint with streaming (SSE), sampling parameters (`temperature`, `top_p`, `max_tokens`, `stop`), structured output (`response_format`), real-time tool-call visibility in streaming chunks, and split `usage` reporting. Works with the Python `openai` SDK, `curl`, IDE plugins, and any OpenAI-compatible client. Agent routing via `model: "agent:<id>"`.
-- **Multi-channel input.** Telegram bot (with `@agent` routing), ACP WebSocket gateway (JSON-RPC 2.0), OpenAI-compatible REST API.
-- **Cron scheduler.** Recurring tasks with standard 5-field cron expressions.
-- **Observability.** Structured JSON logs, dual-write audit (file + DB), `/healthz` and `/metrics` endpoints.
+**Safety.** Default-deny policy engine with hot-reload. WASM sandbox (wazero, pure Go). Gateway security: API key auth, per-key rate limiting, CORS. OpenTelemetry traces and metrics (zero overhead when disabled).
 
 ## Use cases
 
-- **Persistent personal assistant.** A local agent that stays running, remembers context across sessions, and acts on scheduled tasks — without depending on a cloud service.
-- **Agent teams.** Specialized agents (researcher, coder, reviewer) each with their own LLM provider, system prompt, and tool access. Route tasks via ACP, Telegram, or the TUI.
-- **Unattended automation.** Queue work and walk away. Cron triggers, heartbeat monitoring, retry-with-backoff. Failures dead-letter instead of disappearing.
-- **Self-hosted AI gateway.** Full OpenAI-compatible API backed by any provider, with streaming tool visibility, sampling parameter passthrough, structured output, policy controls, and audit logging that upstream APIs don't offer.
-- **WASM skill sandbox.** Develop skills with memory limits and fault quarantine. Hot-reload during development. A buggy skill can't take down the daemon.
-- **Local MCP host.** Connect MCP servers (stdio or SSE) and expose their tools through a policy-controlled interface.
+### Multi-agent business team
+
+Define specialized agents that delegate work to each other:
+
+```yaml
+# ~/.goclaw/config.yaml
+agents:
+  - agent_id: manager
+    model: gemini-2.5-pro
+    soul: "You coordinate between marketer and dev. Break tasks into subtasks and delegate."
+    worker_count: 4
+  - agent_id: marketer
+    model: claude-sonnet-4-5-20250929
+    soul: "B2B lead generation strategist. Research ICPs, craft outreach sequences."
+    provider: anthropic
+  - agent_id: dev
+    model: gemini-2.5-flash
+    soul: "Full-stack developer. Build landing pages, set up tracking, deploy."
+```
+
+```bash
+curl http://127.0.0.1:18789/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"agent:manager","messages":[{"role":"user","content":"Create a lead gen campaign targeting SaaS CTOs"}]}'
+```
+
+The manager delegates research to the marketer and implementation to the dev, each using their own LLM and tools.
+
+### Self-hosted AI gateway
+
+Expose any LLM behind an OpenAI-compatible API with policy controls and audit logging:
+
+```bash
+# Stream responses with tool-call visibility
+curl -N http://127.0.0.1:18789/v1/chat/completions \
+  -H "Authorization: Bearer $(cat ~/.goclaw/auth.token)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "agent:researcher",
+    "messages": [{"role": "user", "content": "search for Go 1.24 release notes"}],
+    "stream": true,
+    "temperature": 0.7
+  }'
+```
+
+### Local dev assistant with Ollama
+
+Zero-cost setup with no API key — just Ollama running locally:
+
+```yaml
+# ~/.goclaw/config.yaml
+llm:
+  provider: ollama
+  openai_model: qwen3:8b
+```
+
+```bash
+goclaw  # starts with local Ollama, no API key needed
+```
 
 ## Install
 
@@ -98,7 +118,7 @@ Installs to `/usr/local/bin` (configurable via `INSTALL_DIR`) and creates `~/.go
 
 ## Quick start
 
-Set an LLM API key:
+Set an LLM API key (or skip for Ollama):
 
 | Provider | Env var |
 |---|---|
@@ -106,7 +126,7 @@ Set an LLM API key:
 | Anthropic | `ANTHROPIC_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
-| Ollama (local) | None — runs locally on `localhost:11434` |
+| Ollama (local) | None — runs on `localhost:11434` |
 
 ```bash
 export GEMINI_API_KEY="your-key"
@@ -114,23 +134,20 @@ goclaw              # interactive TUI
 goclaw --daemon     # headless, logs to stdout
 ```
 
-First run generates `config.yaml`, `policy.yaml`, `SOUL.md`, `auth.token`, and the SQLite database under `~/.goclaw`. Three starter agents (coder, researcher, writer) are available immediately. Create new agents with Ctrl+N or pull from community URLs using `goclaw pull <url>`.
+First run generates `config.yaml`, `policy.yaml`, `SOUL.md`, `auth.token`, and the SQLite database under `~/.goclaw`. Three starter agents (coder, researcher, writer) are available immediately. Create new agents with Ctrl+N or pull from URLs with `goclaw pull <url>`.
 
 ### Development
 
 ```bash
 just build          # compile to /tmp/goclaw
 just run            # build + launch (interactive TUI)
-just run-headless   # build + launch (headless)
 just test           # go test ./... -count=1
 just check          # build + vet + test
 ```
 
 ## OpenAI-compatible API
 
-GoClaw exposes a full OpenAI-compatible endpoint at `POST /v1/chat/completions`. Use it with any OpenAI SDK client, `curl`, or IDE plugin.
-
-**Basic request:**
+`POST /v1/chat/completions` — works with any OpenAI SDK client, `curl`, or IDE plugin.
 
 ```bash
 curl http://127.0.0.1:18789/v1/chat/completions \
@@ -139,22 +156,7 @@ curl http://127.0.0.1:18789/v1/chat/completions \
   -d '{"model":"goclaw-v1","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-**With sampling parameters and streaming:**
-
-```bash
-curl -N http://127.0.0.1:18789/v1/chat/completions \
-  -H "Authorization: Bearer $(cat ~/.goclaw/auth.token)" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "agent:researcher",
-    "messages": [{"role": "user", "content": "search for Go 1.24 features"}],
-    "stream": true,
-    "temperature": 0.7,
-    "max_tokens": 500
-  }'
-```
-
-**With Python `openai` SDK:**
+**With the Python `openai` SDK:**
 
 ```python
 from openai import OpenAI
@@ -167,7 +169,7 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 ```
 
-**Supported features:** `temperature`, `top_p`, `max_tokens`, `stop`, `stream`, `response_format`, `user`, `tools` (accepted, ignored — tools run autonomously). Streaming responses include real-time `tool_calls` deltas and per-chunk `usage` reporting. Agent routing via `model: "agent:<id>"`. Models listed at `GET /v1/models`.
+Supports `temperature`, `top_p`, `max_tokens`, `stop`, `stream`, `response_format`, `user`. Streaming includes real-time `tool_calls` deltas and per-chunk `usage` reporting. Agent routing via `model: "agent:<id>"`. Models listed at `GET /v1/models`.
 
 ## Configuration
 
@@ -188,40 +190,9 @@ All state lives under `GOCLAW_HOME` (default `~/.goclaw`):
 
 Precedence: environment variables > `config.yaml` > defaults.
 
-## Scope
-
-GoClaw is a local, single-user daemon — same model as Ollama or a local Jupyter kernel. For multi-user setups, run separate instances with different `GOCLAW_HOME` directories.
-
-Not included: browser automation, distributed clustering, mobile/desktop clients. See [SPEC.md](SPEC.md) for full design rationale.
-
-Task delivery is at-least-once. A crash between completing work and writing success causes a retry — safer than silent loss. Idempotency keys guard side effects.
-
 ## Status
 
-**v0.5-dev** — 840+ tests across 29 packages. Under active development; APIs may change.
-
-| Subsystem | Status |
-|---|---|
-| Persistence (SQLite WAL, schema v14) | Stable |
-| Task engine (workers, leases, retry) | Stable |
-| ACP gateway (WebSocket, REST, OpenAI-compat) | Stable |
-| Policy engine (hot-reload) | Stable |
-| WASM sandbox (wazero) | Stable |
-| Multi-agent (registry, routing) | Stable |
-| Streaming responses (SSE, bus events) | Stable |
-| Agent loops (checkpoints, budgets) | Stable |
-| Structured output (JSON Schema validation) | Stable |
-| OpenTelemetry (traces, metrics) | Stable |
-| Gateway security (auth, rate limit, CORS) | Stable |
-| TUI | Functional |
-| Telegram integration | Functional |
-
-## Documentation
-
-| Document | Purpose |
-|---|---|
-| [SPEC.md](SPEC.md) | System specification (90+ normative requirements) |
-| [PDR.md](PDR.md) | Product design rationale |
+**v0.5-dev** — 840+ tests across 29 packages. Single-user local daemon (same model as Ollama or a local Jupyter kernel). Under active development; APIs may change. See [SPEC.md](SPEC.md) for full design rationale.
 
 ## Contributing
 
@@ -244,6 +215,8 @@ internal/
   cron/              Cron scheduler
   tui/               Bubbletea TUI
 ```
+
+See [SPEC.md](SPEC.md) for the full system specification (90+ normative requirements).
 
 ## License
 
