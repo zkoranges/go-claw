@@ -34,11 +34,11 @@ Agent frameworks treat tasks as ephemeral — crash and your work vanishes. GoCl
 
 **OpenAI-compatible API.** Drop-in `/v1/chat/completions` with streaming, sampling parameters, structured output, and tool-call visibility. Route to agents via `model: "agent:<id>"`. Works with the Python `openai` SDK, `curl`, and any compatible client.
 
-**Tools and integrations.** MCP client (stdio + SSE, per-agent policy control). Built-in shell, filesystem, web search, process spawning. WASM skill sandbox with memory limits and quarantine. Telegram bot with human-in-the-loop gates.
+**Tools and integrations.** MCP client (stdio + SSE, per-agent policy control). Built-in shell, filesystem, web search, process spawning. WASM skill sandbox with memory limits and quarantine. Telegram bot with human-in-the-loop gates. Cron scheduler for recurring tasks.
 
-**Streaming and autonomy.** SSE endpoint for real-time token delivery. Agent loops with configurable budgets, termination keywords, and crash-recovery checkpoints. Structured JSON output with schema validation and auto-retry.
+**Streaming and autonomy.** SSE endpoint for real-time token delivery. Agent loops with configurable budgets, termination keywords, and crash-recovery checkpoints. Structured JSON output with schema validation and auto-retry. A2A discovery via `/.well-known/agent.json`.
 
-**Safety.** Default-deny policy engine with hot-reload. WASM sandbox (wazero, pure Go). Gateway security: API key auth, per-key rate limiting, CORS. OpenTelemetry traces and metrics (zero overhead when disabled).
+**Safety.** Default-deny policy engine with hot-reload. WASM sandbox (wazero, pure Go). ACP WebSocket gateway (JSON-RPC 2.0). Gateway security: API key auth, per-key rate limiting, CORS. OpenTelemetry traces and metrics (zero overhead when disabled).
 
 ## Use cases
 
@@ -95,7 +95,7 @@ Zero-cost setup with no API key — just Ollama running locally:
 # ~/.goclaw/config.yaml
 llm:
   provider: ollama
-  openai_model: qwen3:8b
+  openai_model: qwen3:8b  # Ollama uses the openai_model field
 ```
 
 ```bash
@@ -131,7 +131,7 @@ Set an LLM API key (or skip for Ollama):
 ```bash
 export GEMINI_API_KEY="your-key"
 goclaw              # interactive TUI
-goclaw --daemon     # headless, logs to stdout
+goclaw -daemon      # headless, logs to stdout
 ```
 
 First run generates `config.yaml`, `policy.yaml`, `SOUL.md`, `auth.token`, and the SQLite database under `~/.goclaw`. Three starter agents (coder, researcher, writer) are available immediately. Create new agents with Ctrl+N or pull from URLs with `goclaw pull <url>`.
