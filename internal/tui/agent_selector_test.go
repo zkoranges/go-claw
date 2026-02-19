@@ -171,10 +171,10 @@ func TestAgentSelector_ViewEmptyOnDone(t *testing.T) {
 
 func TestAgentSelector_ViewDefaultName(t *testing.T) {
 	agents := []AgentInfo{
-		{ID: "agent1", DisplayName: ""},                  // empty name -> "-"
-		{ID: "agent2", DisplayName: "agent2"},            // same as ID -> "-"
-		{ID: "agent3", DisplayName: "Agent Three"},       // custom name
-		{ID: "agent4", DisplayName: "", Model: ""},       // empty model -> "default"
+		{ID: "agent1", DisplayName: ""},                 // empty name -> "-"
+		{ID: "agent2", DisplayName: "agent2"},           // same as ID -> "-"
+		{ID: "agent3", DisplayName: "Agent Three"},      // custom name
+		{ID: "agent4", DisplayName: "", Model: ""},      // empty model -> "default"
 		{ID: "agent5", DisplayName: "Five", Emoji: "✨"}, // with emoji
 	}
 	as := newAgentSelector(agents, "")

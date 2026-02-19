@@ -18,8 +18,8 @@ type mcpTestPolicy struct {
 
 func (p *mcpTestPolicy) AllowCapability(string) bool { return p.allowed }
 func (p *mcpTestPolicy) AllowHTTPURL(string) bool    { return p.allowed }
-func (p *mcpTestPolicy) AllowPath(string) bool        { return p.allowed }
-func (p *mcpTestPolicy) PolicyVersion() string         { return "test-v1" }
+func (p *mcpTestPolicy) AllowPath(string) bool       { return p.allowed }
+func (p *mcpTestPolicy) PolicyVersion() string       { return "test-v1" }
 
 // Phase 1.2: MCP Bridge Update Tests
 // These tests verify that RegisterMCPTools:

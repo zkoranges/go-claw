@@ -20,13 +20,13 @@ import (
 
 // Config controls the engine's worker pool size, polling behavior, and agent scoping.
 type Config struct {
-	WorkerCount        int
-	PollInterval       time.Duration
-	TaskTimeout        time.Duration
+	WorkerCount         int
+	PollInterval        time.Duration
+	TaskTimeout         time.Duration
 	CancelCheckInterval time.Duration // interval for cooperative cancel checks (default: 10s)
-	MaxQueueDepth      int            // GC-SPEC-QUE-008: 0 = unlimited
-	Bus                *bus.Bus
-	AgentID            string // if set, workers only claim tasks for this agent
+	MaxQueueDepth       int           // GC-SPEC-QUE-008: 0 = unlimited
+	Bus                 *bus.Bus
+	AgentID             string // if set, workers only claim tasks for this agent
 }
 
 // Processor transforms a claimed task into a result string or error.
