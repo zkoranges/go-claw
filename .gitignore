@@ -14,5 +14,8 @@
 # Reference implementations (large, read-only)
 reference/
 
+# Test coverage
+coverage.out
+
 # Git worktrees
 .worktrees/

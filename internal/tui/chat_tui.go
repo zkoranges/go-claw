@@ -499,7 +499,7 @@ func (m chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				var buf bytes.Buffer
-				shouldExit := handleCommand(line, &m.cc, m.sessionID, &buf)
+				shouldExit := handleCommand(m.ctx, line, &m.cc, m.sessionID, &buf)
 				out := strings.TrimSpace(buf.String())
 				if out != "" {
 					m.history = append(m.history, chatEntry{role: chatRoleSystem, text: out})

@@ -40,6 +40,25 @@ fmt-check:
         exit 1
     fi
 
+# run linter (golangci-lint if available, else go vet)
+lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v golangci-lint &>/dev/null; then
+        golangci-lint run ./...
+    else
+        echo "golangci-lint not found, falling back to go vet"
+        go vet ./...
+    fi
+
+# generate test coverage report
+coverage:
+    go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
+
+# run persistence benchmarks
+bench:
+    go test ./internal/persistence/ -bench=. -run='^$'
+
 # build + vet + test
 check: build vet test
 

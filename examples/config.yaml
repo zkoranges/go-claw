@@ -1,0 +1,102 @@
+# GoClaw example configuration
+# Copy to ~/.goclaw/config.yaml and customize.
+
+# Worker pool size (number of concurrent task executors)
+worker_count: 3
+
+# Task execution timeout (seconds)
+task_timeout_seconds: 120
+
+# Gateway bind address
+bind_addr: "127.0.0.1:18789"
+
+# Log level: debug, info, warn, error
+log_level: "info"
+
+# LLM provider configuration
+llm:
+  # Active provider: "google", "anthropic", "openai", "ollama", "openrouter"
+  provider: "google"
+  gemini_model: "gemini-2.5-flash"
+
+# Per-provider settings (API keys, custom endpoints, extra models)
+providers:
+  google:
+    api_key: "${GEMINI_API_KEY}"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+  ollama:
+    base_url: "http://localhost:11434"
+
+# Centralized API keys for tools and integrations
+api_keys:
+  brave_search: "${BRAVE_API_KEY}"
+
+# Agent definitions
+agents:
+  - agent_id: coder
+    display_name: "Coder"
+    provider: "google"
+    model: "gemini-2.5-pro"
+    soul: "You are a senior software engineer. Write clean, tested, production-ready code."
+    capabilities:
+      - tools.exec
+      - tools.read_file
+      - tools.write_file
+
+  - agent_id: researcher
+    display_name: "Researcher"
+    provider: "google"
+    model: "gemini-2.5-flash"
+    soul: "You are a research assistant. Find accurate information and cite sources."
+    capabilities:
+      - tools.web_search
+      - tools.read_url
+
+  - agent_id: writer
+    display_name: "Writer"
+    provider: "ollama"
+    model: "qwen3:8b"
+    soul: "You are a technical writer. Produce clear, concise documentation."
+    capabilities:
+      - tools.read_file
+      - tools.write_file
+
+# Workflow plans
+plans:
+  - name: code-review
+    steps:
+      - id: analyze
+        agent_id: coder
+        prompt: "Review the latest git diff for bugs, style issues, and security concerns."
+      - id: summarize
+        agent_id: writer
+        prompt: "Write a summary of the code review findings."
+        depends_on: [analyze]
+
+# Delegation limits
+delegation_max_hops: 2
+
+# Retention policy (days, 0 = keep forever)
+retention_task_events_days: 30
+retention_audit_log_days: 90
+retention_messages_days: 7
+
+# Streaming responses (v0.5)
+streaming:
+  enabled: true
+  buffer_size: 64
+
+# OpenTelemetry (v0.5, disabled by default)
+telemetry:
+  enabled: false
+  exporter: "none"
+  service_name: "goclaw"
+  sample_rate: 1.0
+
+# Gateway security (v0.5, disabled by default)
+gateway:
+  auth:
+    enabled: false
+  rate_limit:
+    enabled: false

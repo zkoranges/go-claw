@@ -20,12 +20,13 @@ import (
 
 // Config controls the engine's worker pool size, polling behavior, and agent scoping.
 type Config struct {
-	WorkerCount   int
-	PollInterval  time.Duration
-	TaskTimeout   time.Duration
-	MaxQueueDepth int // GC-SPEC-QUE-008: 0 = unlimited
-	Bus           *bus.Bus
-	AgentID       string // if set, workers only claim tasks for this agent
+	WorkerCount        int
+	PollInterval       time.Duration
+	TaskTimeout        time.Duration
+	CancelCheckInterval time.Duration // interval for cooperative cancel checks (default: 10s)
+	MaxQueueDepth      int            // GC-SPEC-QUE-008: 0 = unlimited
+	Bus                *bus.Bus
+	AgentID            string // if set, workers only claim tasks for this agent
 }
 
 // Processor transforms a claimed task into a result string or error.
@@ -121,6 +122,9 @@ func New(store *persistence.Store, proc Processor, cfg Config, pol ...policy.Che
 	}
 	if cfg.TaskTimeout <= 0 {
 		cfg.TaskTimeout = 10 * time.Minute
+	}
+	if cfg.CancelCheckInterval <= 0 {
+		cfg.CancelCheckInterval = 10 * time.Second
 	}
 	if proc == nil {
 		proc = EchoProcessor{}
@@ -297,7 +301,7 @@ func (e *Engine) handleTask(ctx context.Context, task persistence.Task) {
 	}
 
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(e.config.CancelCheckInterval)
 		defer ticker.Stop()
 		for {
 			select {

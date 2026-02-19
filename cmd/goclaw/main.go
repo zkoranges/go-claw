@@ -92,8 +92,14 @@ func main() {
 
 	interactive := isatty.IsTerminal(os.Stdout.Fd()) && os.Getenv("GOCLAW_NO_TUI") == ""
 	daemon := flag.Bool("daemon", false, "run in daemon mode (no chat REPL, logs to stdout)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = printUsage
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(Version)
+		os.Exit(0)
+	}
 
 	if *daemon {
 		interactive = false

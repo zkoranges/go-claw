@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 )
 
 // RememberFactArgs is the input for the remember_fact tool.
@@ -83,6 +84,11 @@ func (h *RememberFactHandler) Handle(ctx context.Context, agentID string, input 
 
 	// Publish event for user notification (async, non-blocking)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in async publish", "recover", r)
+			}
+		}()
 		h.Bus.Publish(MemoryCreatedEvent{
 			AgentID: agentID,
 			Key:     args.Key,

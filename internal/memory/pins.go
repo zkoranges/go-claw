@@ -86,6 +86,8 @@ func (pm *PinManager) StartFileWatcher(ctx context.Context, agentID string) {
 			select {
 			case <-ticker.C:
 				pm.refreshChangedFiles(ctx, agentID)
+			case <-ctx.Done():
+				return
 			case <-pm.stop:
 				return
 			}

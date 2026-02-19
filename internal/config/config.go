@@ -289,6 +289,15 @@ type Config struct {
 
 	HeartbeatIntervalMinutes int `yaml:"heartbeat_interval_minutes"`
 
+	// DelegationTimeoutSeconds is the default timeout for delegate_task (default: 120, max: 300).
+	DelegationTimeoutSeconds int `yaml:"delegation_timeout_seconds"`
+
+	// EngineTickSeconds controls the engine's main loop tick interval (default: 10).
+	EngineTickSeconds int `yaml:"engine_tick_seconds"`
+
+	// ApprovalTimeoutSeconds is the timeout for HITL approval gates (default: 60).
+	ApprovalTimeoutSeconds int `yaml:"approval_timeout_seconds"`
+
 	// DelegationMaxHops limits delegation chain depth to prevent infinite recursion.
 	// Validated: must be < WorkerCount for each agent to prevent deadlock.
 	DelegationMaxHops int `yaml:"delegation_max_hops"`
@@ -334,6 +343,36 @@ type PlanStepConfig struct {
 
 // APIKey returns the value for the named API key, checking env overrides first.
 // Env mapping: "brave_search" → BRAVE_API_KEY.
+// DelegationTimeout returns the delegation timeout as a time.Duration.
+func (c Config) DelegationTimeout() time.Duration {
+	s := c.DelegationTimeoutSeconds
+	if s <= 0 {
+		s = 120
+	}
+	if s > 300 {
+		s = 300
+	}
+	return time.Duration(s) * time.Second
+}
+
+// EngineTickInterval returns the engine tick interval as a time.Duration.
+func (c Config) EngineTickInterval() time.Duration {
+	s := c.EngineTickSeconds
+	if s <= 0 {
+		s = 10
+	}
+	return time.Duration(s) * time.Second
+}
+
+// ApprovalTimeout returns the approval gate timeout as a time.Duration.
+func (c Config) ApprovalTimeout() time.Duration {
+	s := c.ApprovalTimeoutSeconds
+	if s <= 0 {
+		s = 60
+	}
+	return time.Duration(s) * time.Second
+}
+
 func (c Config) APIKey(name string) string {
 	envMap := map[string]string{
 		"brave_search":      "BRAVE_API_KEY",
@@ -533,6 +572,9 @@ func defaultConfig() Config {
 		RetentionAuditLogDays:    365,
 		RetentionMessagesDays:    90,
 		HeartbeatIntervalMinutes: 30,
+		DelegationTimeoutSeconds: 120,
+		EngineTickSeconds:        10,
+		ApprovalTimeoutSeconds:   60,
 		Skills: SkillsConfig{
 			ProjectDir: "./skills",
 			ExtraDirs:  nil, LegacyMode: false,

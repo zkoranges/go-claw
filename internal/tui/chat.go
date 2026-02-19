@@ -84,7 +84,8 @@ func RunChat(ctx context.Context, cc ChatConfig) error {
 }
 
 // handleCommand processes a slash command. Returns true if the chat should exit.
-func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer) bool {
+// The ctx parameter allows in-flight operations to be cancelled when the TUI exits.
+func handleCommand(ctx context.Context, line string, cc *ChatConfig, sessionID string, out io.Writer) bool {
 	parts := strings.SplitN(line, " ", 2)
 	cmd := strings.ToLower(parts[0])
 	// Common typo/alias.
@@ -139,6 +140,12 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		fmt.Fprintln(out, "    /clear                       Clear conversation history")
 		fmt.Fprintln(out, "    /quit                        Exit the chat")
 		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  Shortcuts:")
+		fmt.Fprintln(out, "    @agent <msg>                 Switch to agent and send message")
+		fmt.Fprintln(out, "    @agent                       Switch to agent (sticky)")
+		fmt.Fprintln(out, "    Ctrl+A                       Toggle activity feed")
+		fmt.Fprintln(out, "    Ctrl+N                       Create a new agent")
+		fmt.Fprintln(out)
 
 	case "/allow":
 		if arg == "" {
@@ -179,10 +186,10 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		fmt.Fprintf(out, "  Session: %s\n\n", sessionID)
 
 	case "/agent", "/agents":
-		handleAgentCommand(arg, cc, out)
+		handleAgentCommand(ctx, arg, cc, out)
 
 	case "/skills":
-		handleSkillsCommand(arg, cc, out)
+		handleSkillsCommand(ctx, arg, cc, out)
 
 	case "/config":
 		handleConfigCommand(arg, cc, out)
@@ -194,37 +201,37 @@ func handleCommand(line string, cc *ChatConfig, sessionID string, out io.Writer)
 		handlePlanCommand(arg, cc, out)
 
 	case "/memory":
-		handleMemoryCommand(arg, cc, out)
+		handleMemoryCommand(ctx, arg, cc, out)
 
 	case "/remember":
-		handleRememberCommand(arg, cc, out)
+		handleRememberCommand(ctx, arg, cc, out)
 
 	case "/forget":
-		handleForgetCommand(arg, cc, out)
+		handleForgetCommand(ctx, arg, cc, out)
 
 	case "/clear":
-		handleClearCommand(cc, sessionID, out)
+		handleClearCommand(ctx, cc, sessionID, out)
 
 	case "/pin":
-		handlePinCommand(arg, cc, out)
+		handlePinCommand(ctx, arg, cc, out)
 
 	case "/unpin":
-		handleUnpinCommand(arg, cc, out)
+		handleUnpinCommand(ctx, arg, cc, out)
 
 	case "/pinned":
-		handlePinnedCommand(cc, out)
+		handlePinnedCommand(ctx, cc, out)
 
 	case "/share":
-		handleShareCommand(arg, cc, out)
+		handleShareCommand(ctx, arg, cc, out)
 
 	case "/unshare":
-		handleUnshareCommand(arg, cc, out)
+		handleUnshareCommand(ctx, arg, cc, out)
 
 	case "/shared":
-		handleSharedCommand(cc, out)
+		handleSharedCommand(ctx, cc, out)
 
 	case "/context":
-		handleContextCommand(cc, out)
+		handleContextCommand(ctx, cc, out)
 
 	default:
 		fmt.Fprintf(out, "  Unknown command: %s (type /help for available commands)\n\n", cmd)
@@ -282,7 +289,7 @@ func handlePlanCommand(arg string, cc *ChatConfig, out io.Writer) {
 }
 
 // handleSkillsCommand processes /skills and /skills setup <name>.
-func handleSkillsCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handleSkillsCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	catalog := tools.FullCatalog(cc.Providers)
 	apiKeys := make(map[string]string)
 	if cc.Cfg != nil {
@@ -296,7 +303,7 @@ func handleSkillsCommand(arg string, cc *ChatConfig, out io.Writer) {
 	// Fetch WASM skills from store.
 	var wasmStatuses []tools.SkillStatus
 	if cc.Store != nil {
-		records, err := cc.Store.ListSkills(context.Background())
+		records, err := cc.Store.ListSkills(ctx)
 		if err == nil && len(records) > 0 {
 			toolRecords := make([]tools.SkillRecord, len(records))
 			for i, r := range records {
@@ -523,7 +530,7 @@ func handleSkillSetup(name string, catalog []tools.SkillInfo, apiKeys map[string
 }
 
 // handleAgentCommand processes /agents sub-commands.
-func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handleAgentCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Switcher == nil {
 		fmt.Fprintln(out, "  Multi-agent not available.")
 		fmt.Fprintln(out)
@@ -593,7 +600,7 @@ func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
 			model = cc.Cfg.GeminiModel
 		}
 
-		if err := cc.Switcher.CreateAgent(context.Background(), newID, newID, provider, model, soul); err != nil {
+		if err := cc.Switcher.CreateAgent(ctx, newID, newID, provider, model, soul); err != nil {
 			fmt.Fprintf(out, "  Error: %v\n\n", err)
 			return
 		}
@@ -624,7 +631,7 @@ func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
 			return
 		}
 
-		if err := cc.Switcher.RemoveAgent(context.Background(), removeID); err != nil {
+		if err := cc.Switcher.RemoveAgent(ctx, removeID); err != nil {
 			fmt.Fprintf(out, "  Error: %v\n\n", err)
 			return
 		}
@@ -644,7 +651,7 @@ func handleAgentCommand(arg string, cc *ChatConfig, out io.Writer) {
 		fmt.Fprintln(out)
 
 	case "team":
-		handleTeamCommand(subArg, cc, out)
+		handleTeamCommand(ctx, subArg, cc, out)
 
 	default:
 		// Treat as agent ID to switch to (backward compat with /agent <id>).
@@ -684,7 +691,7 @@ func soulForRole(role string) string {
 }
 
 // handleTeamCommand processes /agents team sub-commands.
-func handleTeamCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handleTeamCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	if strings.TrimSpace(arg) == "" {
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "  Usage: /agents team <role1> [role2] [role3...]")
@@ -723,7 +730,7 @@ func handleTeamCommand(arg string, cc *ChatConfig, out io.Writer) {
 	for _, role := range roles {
 		id := strings.ToLower(role)
 		soul := soulForRole(id)
-		if err := cc.Switcher.CreateAgent(context.Background(), id, id, provider, model, soul); err != nil {
+		if err := cc.Switcher.CreateAgent(ctx, id, id, provider, model, soul); err != nil {
 			fmt.Fprintf(out, "  Skipped %s: %v\n", id, err)
 			continue
 		}
@@ -962,7 +969,7 @@ func maskValue(v string) string {
 }
 
 // handleMemoryCommand processes /memory subcommands (list, search, delete, clear).
-func handleMemoryCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handleMemoryCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
@@ -976,7 +983,6 @@ func handleMemoryCommand(arg string, cc *ChatConfig, out io.Writer) {
 		subarg = strings.TrimSpace(parts[1])
 	}
 
-	ctx := context.Background()
 	agentID := cc.CurrentAgent
 	if agentID == "" {
 		agentID = "default"
@@ -1050,7 +1056,7 @@ func handleMemoryCommand(arg string, cc *ChatConfig, out io.Writer) {
 }
 
 // handleRememberCommand processes /remember <key> <value>.
-func handleRememberCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handleRememberCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
@@ -1067,7 +1073,6 @@ func handleRememberCommand(arg string, cc *ChatConfig, out io.Writer) {
 	key := strings.TrimSpace(parts[0])
 	value := strings.TrimSpace(parts[1])
 
-	ctx := context.Background()
 	agentID := cc.CurrentAgent
 	if agentID == "" {
 		agentID = "default"
@@ -1081,7 +1086,7 @@ func handleRememberCommand(arg string, cc *ChatConfig, out io.Writer) {
 }
 
 // handleForgetCommand processes /forget <key>.
-func handleForgetCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handleForgetCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
@@ -1095,7 +1100,6 @@ func handleForgetCommand(arg string, cc *ChatConfig, out io.Writer) {
 		return
 	}
 
-	ctx := context.Background()
 	agentID := cc.CurrentAgent
 	if agentID == "" {
 		agentID = "default"
@@ -1109,14 +1113,13 @@ func handleForgetCommand(arg string, cc *ChatConfig, out io.Writer) {
 }
 
 // handleClearCommand processes /clear.
-func handleClearCommand(cc *ChatConfig, sessionID string, out io.Writer) {
+func handleClearCommand(ctx context.Context, cc *ChatConfig, sessionID string, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
 		return
 	}
 
-	ctx := context.Background()
 	agentID := cc.CurrentAgent
 	if agentID == "" {
 		agentID = "default"
@@ -1131,7 +1134,7 @@ func handleClearCommand(cc *ChatConfig, sessionID string, out io.Writer) {
 }
 
 // handlePinCommand processes /pin <filepath> or /pin text <label> <content>.
-func handlePinCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handlePinCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
@@ -1145,7 +1148,6 @@ func handlePinCommand(arg string, cc *ChatConfig, out io.Writer) {
 		return
 	}
 
-	ctx := context.Background()
 	agentID := cc.CurrentAgent
 	if agentID == "" {
 		agentID = "default"
@@ -1179,7 +1181,7 @@ func handlePinCommand(arg string, cc *ChatConfig, out io.Writer) {
 }
 
 // handleUnpinCommand processes /unpin <source>.
-func handleUnpinCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handleUnpinCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
@@ -1193,7 +1195,6 @@ func handleUnpinCommand(arg string, cc *ChatConfig, out io.Writer) {
 		return
 	}
 
-	ctx := context.Background()
 	agentID := cc.CurrentAgent
 	if agentID == "" {
 		agentID = "default"
@@ -1207,14 +1208,13 @@ func handleUnpinCommand(arg string, cc *ChatConfig, out io.Writer) {
 }
 
 // handlePinnedCommand processes /pinned.
-func handlePinnedCommand(cc *ChatConfig, out io.Writer) {
+func handlePinnedCommand(ctx context.Context, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
 		return
 	}
 
-	ctx := context.Background()
 	agentID := cc.CurrentAgent
 	if agentID == "" {
 		agentID = "default"
@@ -1244,14 +1244,13 @@ func handlePinnedCommand(cc *ChatConfig, out io.Writer) {
 //
 //	/share all with <agent> — Share all memories
 //	/share pin <source> with <agent> — Share a specific pin
-func handleShareCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handleShareCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
 		return
 	}
 
-	ctx := context.Background()
 	sourceAgent := cc.CurrentAgent
 	if sourceAgent == "" {
 		sourceAgent = "default"
@@ -1310,14 +1309,13 @@ func handleShareCommand(arg string, cc *ChatConfig, out io.Writer) {
 // Usage: /unshare <key> from <agent> — Revoke a specific memory share
 //
 //	/unshare pin <source> from <agent> — Revoke a specific pin share
-func handleUnshareCommand(arg string, cc *ChatConfig, out io.Writer) {
+func handleUnshareCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
 		return
 	}
 
-	ctx := context.Background()
 	sourceAgent := cc.CurrentAgent
 	if sourceAgent == "" {
 		sourceAgent = "default"
@@ -1356,14 +1354,13 @@ func handleUnshareCommand(arg string, cc *ChatConfig, out io.Writer) {
 }
 
 // handleSharedCommand lists what's shared with the current agent.
-func handleSharedCommand(cc *ChatConfig, out io.Writer) {
+func handleSharedCommand(ctx context.Context, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
 		return
 	}
 
-	ctx := context.Background()
 	targetAgent := cc.CurrentAgent
 	if targetAgent == "" {
 		targetAgent = "default"
@@ -1392,14 +1389,13 @@ func handleSharedCommand(cc *ChatConfig, out io.Writer) {
 }
 
 // handleContextCommand displays the token budget for the current agent.
-func handleContextCommand(cc *ChatConfig, out io.Writer) {
+func handleContextCommand(ctx context.Context, cc *ChatConfig, out io.Writer) {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
 		return
 	}
 
-	ctx := context.Background()
 	agentID := cc.CurrentAgent
 	if agentID == "" {
 		agentID = "default"

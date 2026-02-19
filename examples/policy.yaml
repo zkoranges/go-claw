@@ -1,0 +1,48 @@
+# GoClaw example policy (default-deny)
+# Copy to ~/.goclaw/policy.yaml and customize.
+#
+# GoClaw uses a default-deny policy model:
+# - All capabilities are denied unless explicitly allowed
+# - HTTP domains are blocked unless explicitly allowed
+# - File paths are restricted unless explicitly allowed
+
+# Allowed HTTP domains for web access tools
+allow_domains:
+  - github.com
+  - stackoverflow.com
+  - pkg.go.dev
+  - docs.python.org
+
+# Allowed filesystem paths (tools.read_file, tools.write_file)
+allow_paths:
+  - /tmp
+  - "${HOME}/projects"
+
+# Allowed tool capabilities
+# Available capabilities:
+#   acp.read              - Read via ACP WebSocket
+#   acp.mutate            - Mutate via ACP WebSocket
+#   tools.web_search      - Web search (Brave, DuckDuckGo, Perplexity)
+#   tools.read_url        - Fetch and read URLs
+#   tools.read_file       - Read local files
+#   tools.write_file      - Write local files
+#   tools.exec            - Execute shell commands
+#   tools.spawn_task      - Create new tasks
+#   tools.delegate_task   - Delegate to other agents (blocking)
+#   tools.delegate_task_async - Delegate to other agents (async)
+allow_capabilities:
+  - acp.read
+  - tools.web_search
+  - tools.read_url
+  - tools.read_file
+
+# Allow loopback connections (127.0.0.1)
+allow_loopback: true
+
+# MCP tool policy (v0.4)
+# mcp:
+#   rules:
+#     - agent: "coder"
+#       server: "github"
+#       tool: "*"
+#       allow: true

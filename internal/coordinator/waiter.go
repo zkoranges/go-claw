@@ -181,14 +181,26 @@ func (w *Waiter) checkTerminal(ctx context.Context, taskID string) (*TaskResult,
 		return nil, nil
 	}
 
+	// DurationMs: calculated from task creation to completion (UpdatedAt).
+	// The Task struct doesn't carry started_at, but UpdatedAt is set on
+	// each state transition, so (UpdatedAt - CreatedAt) is a reasonable
+	// approximation of total wall-clock time including queue wait.
+	durationMs := task.UpdatedAt.Sub(task.CreatedAt).Milliseconds()
+
+	// PromptTokens, CompletionTokens, CostUSD: the brain (Genkit/Gemini)
+	// does not currently return token counts or cost data after generation.
+	// The Store.UpdateTaskTokens() method exists but is never called in
+	// production because the LLM provider SDK does not expose usage stats.
+	// These fields will remain 0 until the brain layer is updated to
+	// extract and persist token usage from provider responses.
 	return &TaskResult{
 		TaskID:           task.ID,
 		Status:           string(task.Status),
 		Output:           task.Result,
-		PromptTokens:     0, // TODO: populate from task metrics
-		CompletionTokens: 0, // TODO: populate from task metrics
-		CostUSD:          0, // TODO: populate from task metrics
-		DurationMs:       0, // TODO: calculate from timestamps
+		PromptTokens:     0,
+		CompletionTokens: 0,
+		CostUSD:          0,
+		DurationMs:       durationMs,
 		Error:            task.Error,
 	}, nil
 }

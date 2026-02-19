@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,5 +186,170 @@ plans:
 		if len(writeStep.DependsOn) != 1 || writeStep.DependsOn[0] != "research" {
 			t.Fatalf("write step depends_on: got %v, want [research]", writeStep.DependsOn)
 		}
+	}
+}
+
+func TestLoadDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, ".env")
+
+	content := `# comment
+TEST_LOADENV_FOO=bar
+TEST_LOADENV_EMPTY=
+  TEST_LOADENV_SPACES = trimmed
+
+MALFORMED_NO_EQUALS
+`
+	if err := os.WriteFile(envFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unset to ensure loadDotEnv sets them.
+	os.Unsetenv("TEST_LOADENV_FOO")
+	os.Unsetenv("TEST_LOADENV_SPACES")
+	t.Cleanup(func() {
+		os.Unsetenv("TEST_LOADENV_FOO")
+		os.Unsetenv("TEST_LOADENV_SPACES")
+	})
+
+	loadDotEnv(envFile)
+
+	if v := os.Getenv("TEST_LOADENV_FOO"); v != "bar" {
+		t.Errorf("TEST_LOADENV_FOO = %q, want %q", v, "bar")
+	}
+	if v := os.Getenv("TEST_LOADENV_SPACES"); v != "trimmed" {
+		t.Errorf("TEST_LOADENV_SPACES = %q, want %q", v, "trimmed")
+	}
+}
+
+func TestLoadDotEnv_DoesNotOverrideExisting(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envFile, []byte("TEST_LDENV_EXIST=fromfile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("TEST_LDENV_EXIST", "original")
+	loadDotEnv(envFile)
+
+	if v := os.Getenv("TEST_LDENV_EXIST"); v != "original" {
+		t.Errorf("expected env to keep original value, got %q", v)
+	}
+}
+
+func TestLoadDotEnv_MissingFile(t *testing.T) {
+	// Should not panic on missing file.
+	loadDotEnv("/nonexistent/.env")
+}
+
+func TestLoadAuthToken_FromEnv(t *testing.T) {
+	t.Setenv("GOCLAW_AUTH_TOKEN", "env-token-123")
+	tok, err := loadAuthToken(t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tok != "env-token-123" {
+		t.Errorf("token = %q, want %q", tok, "env-token-123")
+	}
+}
+
+func TestLoadAuthToken_FromFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GOCLAW_AUTH_TOKEN", "") // clear env
+	if err := os.WriteFile(filepath.Join(home, "auth.token"), []byte("file-token-456\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tok, err := loadAuthToken(home)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tok != "file-token-456" {
+		t.Errorf("token = %q, want %q", tok, "file-token-456")
+	}
+}
+
+func TestLoadAuthToken_GeneratesNew(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GOCLAW_AUTH_TOKEN", "")
+
+	tok, err := loadAuthToken(home)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tok == "" {
+		t.Fatal("expected generated token, got empty string")
+	}
+	// Verify it was persisted.
+	data, err := os.ReadFile(filepath.Join(home, "auth.token"))
+	if err != nil {
+		t.Fatalf("failed to read persisted token: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != tok {
+		t.Errorf("persisted token = %q, want %q", strings.TrimSpace(string(data)), tok)
+	}
+}
+
+func TestWriteMinimalConfig(t *testing.T) {
+	home := t.TempDir()
+	if err := writeMinimalConfig(home); err != nil {
+		t.Fatalf("writeMinimalConfig: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, "config.yaml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	content := string(data)
+
+	// Should contain key config fields.
+	if !strings.Contains(content, "worker_count") {
+		t.Error("config should contain worker_count")
+	}
+	if !strings.Contains(content, "bind_addr") {
+		t.Error("config should contain bind_addr")
+	}
+	// Should contain starter agents.
+	if !strings.Contains(content, "agent_id") {
+		t.Error("config should contain agent definitions")
+	}
+}
+
+func TestLoadPlans_Empty(t *testing.T) {
+	logger := slog.Default()
+	summaries, plans := loadPlans(nil, nil, logger)
+	if len(summaries) != 0 {
+		t.Errorf("expected empty summaries, got %d", len(summaries))
+	}
+	if len(plans) != 0 {
+		t.Errorf("expected empty plans, got %d", len(plans))
+	}
+}
+
+func TestLoadPlans_ValidConfig(t *testing.T) {
+	logger := slog.Default()
+	planConfigs := []config.PlanConfig{
+		{
+			Name: "test",
+			Steps: []config.PlanStepConfig{
+				{ID: "s1", AgentID: "a1", Prompt: "do stuff"},
+			},
+		},
+	}
+	summaries, plans := loadPlans(planConfigs, []string{"a1"}, logger)
+	if len(summaries) != 1 {
+		t.Errorf("expected 1 summary, got %d", len(summaries))
+	}
+	if summaries["test"].StepCount != 1 {
+		t.Errorf("expected 1 step, got %d", summaries["test"].StepCount)
+	}
+	if plans["test"] == nil {
+		t.Error("expected plan in plansMap")
+	}
+}
+
+func TestVersion_NotEmpty(t *testing.T) {
+	if Version == "" {
+		t.Fatal("Version should not be empty")
 	}
 }
