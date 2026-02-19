@@ -13,3 +13,6 @@
 
 # Reference implementations (large, read-only)
 reference/
+
+# Git worktrees
+.worktrees/
