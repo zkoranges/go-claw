@@ -1,4 +1,4 @@
-version: 1
+version: 2
 sections:
   - id: gateway
     title: Gateway System
@@ -144,6 +144,36 @@ sections:
         priority: "-"
         verified: true
         evidence: [internal/engine/compactor_test.go]
+      # --- v0.5 additions ---
+      - feature: SSE task stream endpoint
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        priority: "-"
+        verified: true
+        evidence: [internal/gateway/stream_test.go]
+      - feature: API key auth middleware
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        priority: "-"
+        verified: true
+        evidence: [internal/gateway/auth_test.go]
+      - feature: Token bucket rate limiter
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        priority: "-"
+        verified: true
+        evidence: [internal/gateway/ratelimit_test.go]
+      - feature: CORS middleware
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        priority: "-"
+        verified: true
+        evidence: [internal/gateway/cors_test.go]
+      - feature: A2A agent card endpoint
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        priority: "-"
+        verified: true
 
   - id: security
     title: Security Features
@@ -384,6 +414,21 @@ sections:
         goclaw: not_implemented
         priority: P3
         verified: false
+      # --- v0.4/v0.5 additions ---
+      - feature: Spawn subtask tool
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/tools/tools_test.go]
+      - feature: Loop control tools
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/tools/loop_control_test.go]
+      - feature: HITL approval gates tool
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: false
 
   - id: persistence_reliability
     title: Persistence & Reliability
@@ -502,3 +547,434 @@ sections:
         spec_refs: [GC-SPEC-QUE-008]
         traceability_refs: [GC-SPEC-QUE-008]
         evidence: [docs/EVIDENCE_VERIFY/bounded_lanes_scheduling.txt]
+      # --- v0.5 additions ---
+      - feature: Loop checkpoint persistence
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/persistence/loops_test.go]
+      - feature: Async delegation store
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: false
+
+  # ===== NEW SECTIONS (v0.3-v0.5) =====
+
+  - id: multi_agent
+    title: Multi-Agent & Orchestration
+    owner: platform
+    target_release: v0.3
+    default_risk: medium
+    default_spec_refs:
+      - GC-SPEC-SCOPE-001
+    default_traceability_refs:
+      - GC-SPEC-SCOPE-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: Named multi-agent registry
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/agent/registry_test.go]
+      - feature: "@mention routing in TUI"
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/tui/mention_test.go]
+      - feature: Agent hot-reload (config.yaml fsnotify)
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/config/config_test.go]
+      - feature: Blocking delegation with hop counting
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/tools/delegate_test.go]
+      - feature: Deadlock prevention (self-delegation guard)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/tools/delegate_test.go]
+      - feature: Async delegation (delegations table)
+        openclaw: not_implemented
+        goclaw: partial
+        verified: false
+      - feature: Sub-agent spawning with depth limits
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Parallel sub-agent orchestration
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Cascade stop (stop all sub-agents)
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Agent binding rules (most-specific-wins)
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+
+  - id: memory_context
+    title: Memory & Context
+    owner: platform
+    target_release: v0.3
+    default_risk: medium
+    default_spec_refs:
+      - GC-SPEC-SCOPE-001
+    default_traceability_refs:
+      - GC-SPEC-SCOPE-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: Auto-memory (LLM-extracted facts)
+        openclaw: partial
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/memory/extract_test.go]
+      - feature: Relevance scoring with time decay
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/memory/decay_test.go]
+      - feature: Pinned context (file and text pins)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/memory/pin_test.go]
+      - feature: Pin file watcher (fsnotify auto-update)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/memory/pin_test.go]
+      - feature: Shared team knowledge (cross-agent)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/memory/shared_test.go]
+      - feature: Context budget display
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: Vector/embedding memory search
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Hybrid BM25+vector search
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Pre-compaction memory flush
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Session key scoping (per-peer, per-channel)
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+
+  - id: channels
+    title: Messaging Channels
+    owner: platform
+    target_release: v0.3
+    default_risk: medium
+    default_spec_refs:
+      - GC-SPEC-SCOPE-001
+    default_traceability_refs:
+      - GC-SPEC-SCOPE-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: Telegram bot integration
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/channels/telegram_test.go]
+      - feature: Telegram progressive editing (streaming)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/channels/telegram_test.go]
+      - feature: "Telegram @agent routing"
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/channels/telegram_test.go]
+      - feature: WhatsApp (Baileys)
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Slack / Discord
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Signal
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: iMessage / BlueBubbles
+        openclaw: implemented
+        goclaw: out_of_scope
+        verified: false
+      - feature: Google Chat
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: WebChat (browser widget)
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Plugin channels (Teams, Matrix, IRC)
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+
+  - id: llm_providers
+    title: Model Providers & LLM
+    owner: platform
+    target_release: v0.3
+    default_risk: medium
+    default_spec_refs:
+      - GC-SPEC-SCOPE-001
+    default_traceability_refs:
+      - GC-SPEC-SCOPE-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: Google Gemini (primary)
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: Anthropic Claude
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: OpenAI GPT
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: OpenAI-compatible (generic)
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: Ollama (local models)
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: OpenRouter (100+ models)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: LLM failover with circuit breaker
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: Broad provider ecosystem (20+)
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: API key rotation
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+
+  - id: streaming_autonomy
+    title: Streaming & Autonomy
+    owner: platform
+    target_release: v0.5
+    default_risk: medium
+    default_spec_refs:
+      - GC-SPEC-SCOPE-001
+    default_traceability_refs:
+      - GC-SPEC-SCOPE-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: Streaming LLM responses (SSE)
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/gateway/stream_test.go]
+      - feature: OpenAI streaming format
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/gateway/openai_handler_test.go]
+      - feature: Token-level stream events (bus)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: Agent loops with step limits
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/engine/loop_test.go]
+      - feature: Loop token budget enforcement
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/engine/loop_test.go]
+      - feature: Loop termination keywords
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/engine/loop_test.go]
+      - feature: Loop crash recovery (checkpoints)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/engine/loop_test.go]
+      - feature: Structured output (JSON Schema)
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/structured_test.go]
+      - feature: ValidateAndRetry on schema failure
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/engine/structured_test.go]
+      - feature: Cron scheduler (5-field)
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/cron/cron_test.go]
+      - feature: Heartbeat system
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/engine_test.go]
+
+  - id: observability
+    title: Observability & Ops
+    owner: runtime
+    target_release: v0.5
+    default_risk: medium
+    default_spec_refs:
+      - GC-SPEC-OBS-001
+    default_traceability_refs:
+      - GC-SPEC-OBS-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: OpenTelemetry trace provider
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/otel/otel_test.go]
+      - feature: OTel metric instruments (10)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/otel/metrics_test.go]
+      - feature: Structured logging (slog)
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/engine_test.go]
+      - feature: Dual-write audit (JSONL + DB)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/audit/audit_test.go]
+      - feature: Event bus with backpressure
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/bus/bus_test.go]
+      - feature: Bus drop metrics in healthz and metrics
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/gateway/gateway_api_test.go]
+
+  - id: skills_extensions
+    title: Skills & Extensions
+    owner: platform
+    target_release: v0.3
+    default_risk: medium
+    default_spec_refs:
+      - GC-SPEC-SKL-001
+    default_traceability_refs:
+      - GC-SPEC-SKL-001
+    default_evidence:
+      - docs/TRACEABILITY.md
+    items:
+      - feature: WASM skill sandbox (wazero)
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/sandbox/wasm/host_test.go]
+      - feature: Skill discovery and loading
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/skills/loader_test.go]
+      - feature: Skill installation (goclaw pull)
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/tui/pull_test.go]
+      - feature: Skill watcher hot-reload
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/skills/loader_test.go]
+      - feature: SKILL.md instruction injection
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/engine/brain_test.go]
+      - feature: Per-agent skill filtering
+        openclaw: implemented
+        goclaw: implemented
+        verified: true
+        evidence: [internal/agent/registry_test.go]
+      - feature: WASM per-module memory watermarking
+        openclaw: not_implemented
+        goclaw: goclaw_only
+        verified: true
+        evidence: [internal/sandbox/wasm/host_test.go]
+      - feature: ClawHub skill registry
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: TypeScript plugin system
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false
+      - feature: Plugin slots / JSON Schema config
+        openclaw: implemented
+        goclaw: not_implemented
+        priority: P3
+        verified: false

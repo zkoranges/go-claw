@@ -30,14 +30,21 @@ go test ./internal/persistence/ -bench=. -run=^$
 ```
 cmd/goclaw/main.go          Entry point, startup ordering, signal handling
 internal/
-  persistence/store.go       SQLite store, schema migrations, task queue (~2900 lines)
+  persistence/               SQLite store (split across 12 domain files), schema migrations, task queue
   engine/engine.go           Task execution engine, worker lanes, backpressure
   engine/brain.go            Genkit + Gemini LLM integration, tool dispatch
+  engine/loop.go             Agent loop runner with checkpoints and budgets
+  engine/structured.go       JSON Schema validation, extractJSON, ValidateAndRetry
   gateway/gateway.go         ACP WebSocket server, JSON-RPC, /healthz, /metrics
   gateway/openai_handler.go  OpenAI-compatible chat completions endpoint
+  gateway/stream.go          SSE streaming endpoint
+  gateway/auth.go            API key authentication middleware
+  gateway/ratelimit.go       Token bucket rate limiter
+  gateway/cors.go            CORS middleware
   policy/policy.go           Default-deny policy engine with LivePolicy hot-reload
   audit/audit.go             Dual-write audit (JSONL file + DB)
   sandbox/wasm/host.go       WASM host (wazero), resource limits, fault codes, quarantine
+  sandbox/legacy/skill.go    SKILL.md parser and shell script runner (V1 skill format)
   skills/loader.go           Skill discovery, TOML manifest parsing
   skills/installer.go        Skill installation from URL/path
   config/config.go           YAML config with env overlay
@@ -45,18 +52,25 @@ internal/
   agent/                     Multi-agent registry and scoped execution
   channels/                  Telegram channel integration
   mcp/                       MCP client (stdio + SSE transports)
+  coordinator/               Plan DAG executor, waiter, strategies
+  memory/                    Context pinning, auto-memory, shared knowledge
+  otel/                      OpenTelemetry provider, spans, metrics
+  tokenutil/                 Token counting and estimation
+  pricing/                   LLM provider pricing data
   cron/                      Cron scheduler for recurring tasks
   tui/tui.go                 Bubbletea TUI
   bus/                       In-process event bus
+  shared/                    Context helpers (agent ID, delegation hop, trace)
   safety/                    Input sanitization
   doctor/                    Startup self-checks
+  telemetry/                 Telemetry helpers
 ```
 
 ## Key Concepts
 
 - **8-state task model**: QUEUED → CLAIMED → RUNNING → SUCCEEDED/FAILED/RETRY_WAIT/CANCELED → DEAD_LETTER
 - **SQLite WAL mode**, synchronous=FULL. DB at `${GOCLAW_HOME}/goclaw.db`
-- **Schema migrations** are incremental (v2→v6), using `ALTER TABLE ADD COLUMN` with idempotent error suppression
+- **Schema migrations** are incremental (v2→v14), using `ALTER TABLE ADD COLUMN` with idempotent error suppression
 - **Default-deny policy**: capability-based + domain allowlist for HTTP. Policy file hot-reloads via fsnotify
 - **Engine** uses variadic policy: `engine.New(store, proc, cfg, pol ...policy.Checker)`
 - **Brain** routes through Genkit with tool-call fallback on LLM failure
@@ -77,7 +91,7 @@ internal/
 ## Testing Patterns
 
 - **CRITICAL: Zero API credits from tests.** All tests run offline with no real API calls. Brain tests set `GEMINI_API_KEY=""` to force `llmOn=false` (fallback mode). No E2E tests that consume API budgets.
-- 253+ tests across 28 packages, all passing, all offline, zero API costs
+- 984+ tests across 29 packages, all passing, all offline, zero API costs
 - Session IDs must be valid UUIDs — tests fail with non-UUID session IDs
 - `ClaimNextPendingTask` orders by `priority DESC, created_at ASC, id ASC`
 - `defaultMaxAttempts = 3` — tasks dead-letter after 3 failures
@@ -90,7 +104,7 @@ internal/
 - **SQLite ALTER TABLE**: `ADD COLUMN` cannot use `DEFAULT CURRENT_TIMESTAMP` — use nullable columns
 - **json.Unmarshal**: does NOT clear struct fields absent from JSON — use fresh struct per read
 - **coder/websocket**: context cancellation poisons TCP connection deadlines
-- **Schema version**: currently v8 (`schemaVersionV8`, checksum `gc-v8-2026-02-14-agent-history`). Update both constant and checksum when adding migrations
+- **Schema version**: currently v14 (`schemaVersionV14`, checksum `gc-v14-2026-02-16-loop-checkpoints`). Update both constant and checksum when adding migrations
 - **Brain nil guard**: `RegisterTestAgent` creates `RunningAgent` with `Brain: nil`. Any loop over `ListRunningAgents()` that calls Brain methods must guard with `if ra.Brain != nil`
 
 ## Code Style
@@ -102,156 +116,3 @@ internal/
 - SPEC requirement traceability comments: `// GC-SPEC-XXX-NNN: description`
 - Use canonical status names: `TaskStatusQueued`, `TaskStatusSucceeded` (no aliases)
 
-## v0.4 Implementation Notes (PDR-v7)
-
-### Current milestone: v0.4 (Tools & Reach)
-**PDR**: docs/PDR-v7.md
-**Status**: Phase 1.1 complete (config/policy/manager), test framework for all phases
-
-### Phase 1: MCP Client (COMPLETED)
-- ✅ Config: AgentMCPRef for per-agent refs, SSE transport, env map support
-- ✅ Policy: AllowMCPTool with specificity-based rule matching
-- ✅ Manager: Rewritten with per-agent scoping, auto-discovery, policy checks
-- ⏳ Integration: MCP Bridge, Brain.RegisterMCPTools, main.go wiring (to complete)
-
-### Schema version:
-- Current: v12 (gc-v12-2026-02-15-plan-persistence)
-- Phase 2 will add v13 for async delegations table
-
-### Key existing code being extended (do NOT replace):
-- MCP Manager: Preserved AllTools/CallTool for backward compat
-- Policy: Added AllowMCPTool method (AllowCapability unchanged)
-- Config: Added AgentMCPRef + MCPServers fields (existing fields unchanged)
-- Manager.Start(): Now global-only (per-agent via ConnectAgentServers)
-
-### Test metrics:
-- Baseline: 650 tests
-- Phase 1.1 implementation: 16 tests (config, policy, manager)
-- Full v0.4 test framework: 75 tests (all phases with placeholders)
-- **Current total: 725 tests (70+ requirement met)**
-
-### Remaining implementation phases (test-driven):
-- Phase 2 (Async Delegation): Implement schema v13, delegation store, async tool, brain injection
-- Phase 3 (Telegram Deep): Implement HITL gates, plan progress, alert tool
-- Phase 4 (A2A Protocol): Implement /.well-known/agent.json endpoint
-
-### Key patterns (consistent with codebase):
-- Per-agent MCP: `Manager.ConnectAgentServers(ctx, agentID, configs)`
-- Policy checks: Cast to `policy.Policy` to call `AllowMCPTool(agent, server, tool)`
-- Tool discovery: Non-fatal failures (log warn, continue without tools)
-- Async operations: Use event bus for coordination (delegation.*, plan.*, hitl.* topics)
-
-### Do NOT break:
-- Existing test counts (use _v04 suffix for new tests)
-- OnAgentCreated hook provisioning order (skills → WASM → shell → MCP)
-- Policy.AllowCapability behavior (all existing callers must work unchanged)
-
----
-
-## v0.4 Implementation Status (Current Session)
-
-### Phase 1: MCP Client — COMPLETE ✅
-**Commits**: b8324d6 (Phase 1.2-1.4), previous commits (Phase 1.1)
-
-**Phase 1.1 - Config/Policy/Manager** (16 tests):
-- ✅ AgentMCPRef struct in config.go with inline definitions + SSE transport
-- ✅ MCPServerEntry extended with URL, Transport, Timeout fields
-- ✅ Policy.AllowMCPTool() with specificity-based rule matching
-- ✅ Manager rewrite: per-agent connections, DiscoverTools, InvokeTool, Healthy, Reload
-- ✅ Tests for all above with proper mocking
-
-**Phase 1.2 - MCP Bridge Update** (6 tests):
-- ✅ RegisterMCPTools signature changed to accept agentID
-- ✅ Uses Manager.DiscoverTools for per-agent discovery
-- ✅ Routes through Manager.InvokeTool (policy-enforced)
-- ✅ Audit logging includes agentID
-- ✅ Error wrapping with server/tool context
-- ✅ Discovery failures non-fatal
-
-**Phase 1.3 - Brain Integration** (tests in brain_v04_test.go):
-- ✅ GenkitBrain.RegisterMCPTools(ctx, agentID, manager) method
-- ✅ Imported mcp package for manager access
-- ✅ Test placeholders for registration verification
-
-**Phase 1.4 - main.go Wiring** (integration):
-- ✅ Updated two RegisterMCPTools call sites with new signature
-- ✅ Extract agentID from ra.Config.AgentID
-- ✅ TODO: Phase 1.4 follow-up for per-agent config resolution
-
-**Test Summary**: 725 total tests passing (75 new for v0.4)
-
-### Phase 2: Async Delegation — FOUNDATION COMPLETE ✅
-**Commits**: Latest commit (Schema v13 + Delegation Store)
-
-**Schema Migration** (v8 → v13):
-- ✅ Added schemaVersionV13 with checksum
-- ✅ Created delegations table: id, task_id, parent_agent, child_agent, prompt, status, result, error_msg, created_at, completed_at, injected
-- ✅ Added indexes on (parent_agent, injected) and (task_id)
-
-**Delegation Store** (internal/persistence/delegations.go):
-- ✅ Defined Delegation struct
-- ✅ Created store method signatures (7 CRUD methods marked TODO)
-- ✅ Test framework in place (9 placeholder tests)
-
-**Remaining Phase 2 Work**:
-- Implement Delegation CRUD methods
-- Add delegate_task_async tool to internal/tools/delegate.go
-- Wire engine.onTaskSucceeded/Failed for delegation completion
-- Implement brain.injectPendingDelegations() for result injection
-- TUI activity feed for delegation status
-
-### Next Steps (Phase 3-4)
-- Phase 3: Telegram Deep Integration (HITL gates, plan progress, alert tool)
-- Phase 4: A2A Protocol (/.well-known/agent.json endpoint)
-- Manager backward compat methods (AllTools, CallTool, Start, Stop)
-
----
-
-## v0.5 Implementation Notes
-
-### Current milestone: v0.5 (Streaming & Autonomy)
-### PDR: PDR-v8.md
-### Verify: tools/verify/v05_verify.sh
-
-### Implementation order (strict):
-1. Streaming Responses (internal/engine/brain.go, engine.go, internal/gateway/stream.go, openai_handler.go, internal/channels/telegram.go)
-2. Agent Loops (internal/persistence/loops.go, store.go, internal/engine/loop.go, engine.go, internal/tools/loop_control.go, internal/config/)
-3. Structured Output (internal/engine/structured.go, brain.go, internal/config/)
-4. OpenTelemetry (internal/otel/ — new package, instrumentation across engine, gateway, brain)
-5. Gateway Security (internal/gateway/auth.go, ratelimit.go, cors.go, gateway.go)
-
-### Schema version:
-- Pre-v0.5: v13 (gc-v13-2026-02-15-delegations)
-- Post-v0.5: v14 (gc-v14-2026-02-16-loop-checkpoints)
-- loop_checkpoints table added for agent loop crash recovery
-
-### Key new code:
-- internal/otel/ — OpenTelemetry provider, spans, metrics (zero overhead when disabled)
-- internal/engine/loop.go — LoopRunner with checkpoints, budgets, termination keywords
-- internal/engine/structured.go — JSON Schema validation with extractJSON + ValidateAndRetry
-- internal/gateway/stream.go — SSE streaming endpoint (/api/v1/task/stream)
-- internal/gateway/auth.go — API key authentication middleware (disabled by default)
-- internal/gateway/ratelimit.go — Token bucket rate limiter (per-key isolation)
-- internal/gateway/cors.go — CORS middleware with configurable origins
-- internal/persistence/loops.go — Loop checkpoint CRUD (SaveLoopCheckpoint, LoadLoopCheckpoint)
-- internal/tools/loop_control.go — checkpoint_now + set_loop_status tools
-
-### Key patterns:
-- OTel: use in-memory SpanRecorder for tests, never require external collector
-- Middleware: compose with Wrap() pattern, test independently
-- Streaming: always provide non-streaming fallback path
-- All new files: follow conventions of neighboring files in same package
-- Auth/rate-limit disabled by default (backward compatible)
-
-### Do NOT:
-- Replace Brain.Generate()/Respond() — it's the fallback when streaming unavailable
-- Add new states to the 8-state task machine — loops are above it
-- Require external services in tests (no OTel collector, no LLM calls)
-- Make OTel a hard dependency — everything works with telemetry disabled
-- Store API keys in plaintext in SQLite (use config only for v0.5)
-
-### Verify after each phase:
-Run phase-specific tests, then `just check`, then `go test -race ./...`
-
-### Verify at end:
-./tools/verify/v05_verify.sh

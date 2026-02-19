@@ -25,7 +25,9 @@ func (s *Store) RunRetention(ctx context.Context, taskEventDays, auditLogDays, m
 		if err != nil {
 			return result, fmt.Errorf("purge task_events: %w", err)
 		}
-		result.PurgedTaskEvents, _ = res.RowsAffected()
+		if n, err := res.RowsAffected(); err == nil {
+			result.PurgedTaskEvents = n
+		}
 	}
 
 	if auditLogDays > 0 {
@@ -34,7 +36,9 @@ func (s *Store) RunRetention(ctx context.Context, taskEventDays, auditLogDays, m
 		if err != nil {
 			return result, fmt.Errorf("purge audit_log: %w", err)
 		}
-		result.PurgedAuditLogs, _ = res.RowsAffected()
+		if n, err := res.RowsAffected(); err == nil {
+			result.PurgedAuditLogs = n
+		}
 	}
 
 	if messageDays > 0 {
@@ -43,7 +47,9 @@ func (s *Store) RunRetention(ctx context.Context, taskEventDays, auditLogDays, m
 		if err != nil {
 			return result, fmt.Errorf("purge messages: %w", err)
 		}
-		result.PurgedMessages, _ = res.RowsAffected()
+		if n, err := res.RowsAffected(); err == nil {
+			result.PurgedMessages = n
+		}
 
 		// Purge read inter-agent messages older than the same retention window.
 		// Only messages that have been read (read_at IS NOT NULL) are eligible for purge.
@@ -51,7 +57,9 @@ func (s *Store) RunRetention(ctx context.Context, taskEventDays, auditLogDays, m
 		if err != nil {
 			return result, fmt.Errorf("purge agent_messages: %w", err)
 		}
-		result.PurgedAgentMessages, _ = res.RowsAffected()
+		if n, err := res.RowsAffected(); err == nil {
+			result.PurgedAgentMessages = n
+		}
 	}
 
 	return result, nil

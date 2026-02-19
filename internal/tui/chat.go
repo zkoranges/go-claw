@@ -878,11 +878,7 @@ func handleModelCommand(arg string, cc *ChatConfig, out io.Writer) {
 			model = modelArg[idx+1:]
 		}
 
-		// Normalize provider aliases.
-		switch provider {
-		case "gemini", "googleai":
-			provider = "google"
-		}
+		provider = config.NormalizeProviderName(provider)
 
 		if model == current && provider == currentProvider {
 			fmt.Fprintf(out, "  Already using %s.\n\n", model)
@@ -968,11 +964,28 @@ func maskValue(v string) string {
 	return v[:4] + strings.Repeat("*", len(v)-4)
 }
 
-// handleMemoryCommand processes /memory subcommands (list, search, delete, clear).
-func handleMemoryCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
+// effectiveAgentID returns the current agent ID, defaulting to "default" if empty.
+func effectiveAgentID(cc *ChatConfig) string {
+	if cc.CurrentAgent != "" {
+		return cc.CurrentAgent
+	}
+	return "default"
+}
+
+// requireStore checks that cc.Store is non-nil and prints an error if not.
+// Returns true if the store is available, false otherwise.
+func requireStore(cc *ChatConfig, out io.Writer) bool {
 	if cc.Store == nil {
 		fmt.Fprintln(out, "  Store not available.")
 		fmt.Fprintln(out)
+		return false
+	}
+	return true
+}
+
+// handleMemoryCommand processes /memory subcommands (list, search, delete, clear).
+func handleMemoryCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
+	if !requireStore(cc, out) {
 		return
 	}
 
@@ -983,10 +996,7 @@ func handleMemoryCommand(ctx context.Context, arg string, cc *ChatConfig, out io
 		subarg = strings.TrimSpace(parts[1])
 	}
 
-	agentID := cc.CurrentAgent
-	if agentID == "" {
-		agentID = "default"
-	}
+	agentID := effectiveAgentID(cc)
 
 	switch subcmd {
 	case "list":
@@ -1057,9 +1067,7 @@ func handleMemoryCommand(ctx context.Context, arg string, cc *ChatConfig, out io
 
 // handleRememberCommand processes /remember <key> <value>.
 func handleRememberCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
@@ -1073,10 +1081,7 @@ func handleRememberCommand(ctx context.Context, arg string, cc *ChatConfig, out 
 	key := strings.TrimSpace(parts[0])
 	value := strings.TrimSpace(parts[1])
 
-	agentID := cc.CurrentAgent
-	if agentID == "" {
-		agentID = "default"
-	}
+	agentID := effectiveAgentID(cc)
 
 	if err := cc.Store.SetMemory(ctx, agentID, key, value, "user"); err != nil {
 		fmt.Fprintf(out, "  Error saving: %v\n\n", err)
@@ -1087,9 +1092,7 @@ func handleRememberCommand(ctx context.Context, arg string, cc *ChatConfig, out 
 
 // handleForgetCommand processes /forget <key>.
 func handleForgetCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
@@ -1100,10 +1103,7 @@ func handleForgetCommand(ctx context.Context, arg string, cc *ChatConfig, out io
 		return
 	}
 
-	agentID := cc.CurrentAgent
-	if agentID == "" {
-		agentID = "default"
-	}
+	agentID := effectiveAgentID(cc)
 
 	if err := cc.Store.DeleteMemory(ctx, agentID, arg); err != nil {
 		fmt.Fprintf(out, "  Error deleting: %v\n\n", err)
@@ -1114,16 +1114,11 @@ func handleForgetCommand(ctx context.Context, arg string, cc *ChatConfig, out io
 
 // handleClearCommand processes /clear.
 func handleClearCommand(ctx context.Context, cc *ChatConfig, sessionID string, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
-	agentID := cc.CurrentAgent
-	if agentID == "" {
-		agentID = "default"
-	}
+	agentID := effectiveAgentID(cc)
 
 	if err := cc.Store.DeleteAgentMessages(ctx, agentID, sessionID); err != nil {
 		fmt.Fprintf(out, "  Error clearing: %v\n\n", err)
@@ -1135,9 +1130,7 @@ func handleClearCommand(ctx context.Context, cc *ChatConfig, sessionID string, o
 
 // handlePinCommand processes /pin <filepath> or /pin text <label> <content>.
 func handlePinCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
@@ -1148,10 +1141,7 @@ func handlePinCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Wr
 		return
 	}
 
-	agentID := cc.CurrentAgent
-	if agentID == "" {
-		agentID = "default"
-	}
+	agentID := effectiveAgentID(cc)
 
 	// Check if it's a text pin
 	if strings.HasPrefix(arg, "text ") {
@@ -1182,9 +1172,7 @@ func handlePinCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Wr
 
 // handleUnpinCommand processes /unpin <source>.
 func handleUnpinCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
@@ -1195,10 +1183,7 @@ func handleUnpinCommand(ctx context.Context, arg string, cc *ChatConfig, out io.
 		return
 	}
 
-	agentID := cc.CurrentAgent
-	if agentID == "" {
-		agentID = "default"
-	}
+	agentID := effectiveAgentID(cc)
 
 	if err := cc.Store.RemovePin(ctx, agentID, arg); err != nil {
 		fmt.Fprintf(out, "  Error unpinning: %v\n\n", err)
@@ -1209,16 +1194,11 @@ func handleUnpinCommand(ctx context.Context, arg string, cc *ChatConfig, out io.
 
 // handlePinnedCommand processes /pinned.
 func handlePinnedCommand(ctx context.Context, cc *ChatConfig, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
-	agentID := cc.CurrentAgent
-	if agentID == "" {
-		agentID = "default"
-	}
+	agentID := effectiveAgentID(cc)
 
 	pins, err := cc.Store.ListPins(ctx, agentID)
 	if err != nil {
@@ -1245,16 +1225,11 @@ func handlePinnedCommand(ctx context.Context, cc *ChatConfig, out io.Writer) {
 //	/share all with <agent> — Share all memories
 //	/share pin <source> with <agent> — Share a specific pin
 func handleShareCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
-	sourceAgent := cc.CurrentAgent
-	if sourceAgent == "" {
-		sourceAgent = "default"
-	}
+	sourceAgent := effectiveAgentID(cc)
 
 	// Parse: <key|pin <source>|all> with <target>
 	parts := strings.Fields(arg)
@@ -1310,16 +1285,11 @@ func handleShareCommand(ctx context.Context, arg string, cc *ChatConfig, out io.
 //
 //	/unshare pin <source> from <agent> — Revoke a specific pin share
 func handleUnshareCommand(ctx context.Context, arg string, cc *ChatConfig, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
-	sourceAgent := cc.CurrentAgent
-	if sourceAgent == "" {
-		sourceAgent = "default"
-	}
+	sourceAgent := effectiveAgentID(cc)
 
 	// Parse: <key|pin <source>> from <target>
 	parts := strings.Fields(arg)
@@ -1355,16 +1325,11 @@ func handleUnshareCommand(ctx context.Context, arg string, cc *ChatConfig, out i
 
 // handleSharedCommand lists what's shared with the current agent.
 func handleSharedCommand(ctx context.Context, cc *ChatConfig, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
-	targetAgent := cc.CurrentAgent
-	if targetAgent == "" {
-		targetAgent = "default"
-	}
+	targetAgent := effectiveAgentID(cc)
 
 	shares, err := cc.Store.ListSharesFor(ctx, targetAgent)
 	if err != nil {
@@ -1390,16 +1355,11 @@ func handleSharedCommand(ctx context.Context, cc *ChatConfig, out io.Writer) {
 
 // handleContextCommand displays the token budget for the current agent.
 func handleContextCommand(ctx context.Context, cc *ChatConfig, out io.Writer) {
-	if cc.Store == nil {
-		fmt.Fprintln(out, "  Store not available.")
-		fmt.Fprintln(out)
+	if !requireStore(cc, out) {
 		return
 	}
 
-	agentID := cc.CurrentAgent
-	if agentID == "" {
-		agentID = "default"
-	}
+	agentID := effectiveAgentID(cc)
 
 	// Model limits (default to Gemini 2.5 Flash)
 	modelLimits := map[string]int{

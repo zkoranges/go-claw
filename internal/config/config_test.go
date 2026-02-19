@@ -373,6 +373,27 @@ func TestProviderAPIKey_Ollama(t *testing.T) {
 	}
 }
 
+func TestNormalizeProviderName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"gemini", "google"},
+		{"googleai", "google"},
+		{"google", "google"},
+		{"anthropic", "anthropic"},
+		{"openai", "openai"},
+		{"ollama", "ollama"},
+		{"openrouter", "openrouter"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := config.NormalizeProviderName(tt.input); got != tt.want {
+			t.Errorf("NormalizeProviderName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestLoad_PreferredSearchFromYAML(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	ic := filepath.Join(home, ".goclaw")

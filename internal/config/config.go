@@ -640,10 +640,7 @@ func normalize(cfg *Config) {
 	if cfg.LLMProvider == "" {
 		cfg.LLMProvider = "google"
 	}
-	// Normalize legacy provider name.
-	if cfg.LLMProvider == "gemini" {
-		cfg.LLMProvider = "google"
-	}
+	cfg.LLMProvider = NormalizeProviderName(cfg.LLMProvider)
 	if cfg.GeminiModel == "" {
 		// Use first model from BuiltinModels as default
 		if models, ok := BuiltinModels["google"]; ok && len(models) > 0 {
@@ -711,6 +708,15 @@ func validateDelegation(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// NormalizeProviderName maps legacy provider aliases to canonical names.
+func NormalizeProviderName(name string) string {
+	switch name {
+	case "gemini", "googleai":
+		return "google"
+	}
+	return name
 }
 
 // ProviderAPIKey returns the API key for the given provider, checking env overrides first.

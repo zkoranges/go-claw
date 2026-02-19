@@ -192,7 +192,7 @@ Precedence: environment variables > `config.yaml` > defaults.
 
 ## Status
 
-**v0.5-dev** — 840+ tests across 29 packages. Single-user local daemon (same model as Ollama or a local Jupyter kernel). Under active development; APIs may change. See [SPEC.md](SPEC.md) for full design rationale.
+**v0.5-dev** — 984+ tests across 29 packages. Single-user local daemon (same model as Ollama or a local Jupyter kernel). Under active development; APIs may change. See [SPEC.md](SPEC.md) for full design rationale.
 
 ## Contributing
 

@@ -11,7 +11,7 @@
 ## Quick Start
 
 ```bash
-git clone https://github.com/basket/go-claw.git
+git clone https://github.com/zkoranges/go-claw.git
 cd go-claw
 just check   # build + vet + test (the standard pre-commit command)
 ```

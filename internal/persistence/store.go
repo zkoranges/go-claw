@@ -1365,7 +1365,9 @@ func (s *Store) PurgeSessionPII(ctx context.Context, sessionID, policyVersion, a
 	if err != nil {
 		return result, fmt.Errorf("delete messages: %w", err)
 	}
-	result.MessagesDeleted, _ = res.RowsAffected()
+	if n, err := res.RowsAffected(); err == nil {
+		result.MessagesDeleted = n
+	}
 
 	for _, mid := range msgIDs {
 		if _, err := tx.ExecContext(ctx, `
@@ -1388,7 +1390,9 @@ func (s *Store) PurgeSessionPII(ctx context.Context, sessionID, policyVersion, a
 	if err != nil {
 		return result, fmt.Errorf("tombstone task payloads: %w", err)
 	}
-	result.TaskPayloadsTombed, _ = res.RowsAffected()
+	if n, err := res.RowsAffected(); err == nil {
+		result.TaskPayloadsTombed = n
+	}
 
 	// Record redaction for each tombstoned task.
 	taskRows, err := tx.QueryContext(ctx, `SELECT id FROM tasks WHERE session_id = ?;`, sessionID)
@@ -1425,7 +1429,9 @@ func (s *Store) PurgeSessionPII(ctx context.Context, sessionID, policyVersion, a
 	if err != nil {
 		return result, fmt.Errorf("tombstone task_events: %w", err)
 	}
-	result.TaskEventsTombed, _ = res.RowsAffected()
+	if n, err := res.RowsAffected(); err == nil {
+		result.TaskEventsTombed = n
+	}
 
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("commit purge tx: %w", err)

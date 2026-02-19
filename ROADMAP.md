@@ -2,7 +2,7 @@
 
 **Vision**: The Ollama of multi-agent AI. One binary, terminal-native, persistent AI specialists that know your project.
 
-**Current state**: v0.5-dev. Core daemon works. Multi-agent TUI, multi-provider LLM (Gemini, Anthropic, OpenAI, Ollama), SQLite persistence, WebSocket API, inter-agent messaging, policy engine, WASM skills, Telegram, cron, delegation, DAG executor, MCP client, streaming responses, agent loops with checkpoints, structured output validation, OpenTelemetry instrumentation, gateway security (auth + rate limiting + CORS), async delegation, Telegram HITL gates, A2A endpoint, context pinning, auto-memory, shared team knowledge. 838+ tests passing across 29 packages.
+**Current state**: v0.5-dev. Core daemon works. Multi-agent TUI, multi-provider LLM (Gemini, Anthropic, OpenAI, Ollama), SQLite persistence, WebSocket API, inter-agent messaging, policy engine, WASM skills, Telegram, cron, delegation, DAG executor, MCP client, streaming responses, agent loops with checkpoints, structured output validation, OpenTelemetry instrumentation, gateway security (auth + rate limiting + CORS), async delegation, Telegram HITL gates, A2A endpoint, context pinning, auto-memory, shared team knowledge. 984+ tests passing across 29 packages.
 
 ---
 
